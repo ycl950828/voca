@@ -76,6 +76,14 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
 .badge.word{color:var(--word);background:var(--word-bg)}
 .badge.example{color:var(--ex);background:var(--ex-bg)}
+.badge.sec-LC{color:var(--word);background:var(--word-bg);font-size:13px;letter-spacing:.02em}
+.badge.sec-RC{color:var(--ex);background:var(--ex-bg);font-size:13px;letter-spacing:.02em}
+.secseg{grid-template-columns:1fr 1fr}
+.secseg button{height:auto;padding:8px 4px;display:flex;flex-direction:column;align-items:center;line-height:1.25}
+.secseg button b{font-size:15px}
+.secseg button small{font-size:11px;font-weight:500;color:var(--muted)}
+.li .tag{font-size:11px;font-weight:700;margin-bottom:1px}
+.li .tag.sec-LC{color:var(--word)} .li .tag.sec-RC{color:var(--ex)}
 .badge-row{display:flex;justify-content:flex-end;margin-top:-6px}
 
 .qcard,.acard{flex:1 1 0;min-height:0;border-radius:var(--r);position:relative;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;overflow:hidden}
@@ -279,7 +287,9 @@ const VocabParser = (() => {
       .replace(/[—–]/g, '-');
     s = s.trim();
     // 점선 테두리가 글자로 읽힌 것 (줄 앞/뒤의 | ¦ ! : 등)
-    s = s.replace(/^[|¦!:;_=\-]+\s*/, '').replace(/\s*[|¦!_=]+$/, '');
+    s = s.replace(/^[|¦!:;_\-]+\s*/, '').replace(/^=+(?!\s*[A-Za-z])\s*/, '').replace(/\s*[|¦!_=]+$/, '');  // "= PR" 동의어 표기는 유지
+    // 숙어 표시 ">" 의 다양한 오인식 통일
+    s = s.replace(/^[›»＞→▶▸]\s*/, '> ');
     // "| 11." 처럼 테두리 뒤 번호 / 테두리가 l, I 로 읽힌 경우
     s = s.replace(/^[lI1|]\s+(?=\d{1,4}\s*[.,)])/, '');
     // 손글씨 표시 등으로 번호 앞에 붙은 기호 "/17." "^17."
@@ -367,56 +377,153 @@ const VocabParser = (() => {
     return { term, meaning, kind: 'word', include: !!(term && meaning) };
   }
   function makeExample(en, ko, ref) {
-    const term = tidy(en);
+    // 문장 끝 뒤에 붙은 짧은 잡음 제거 ("downtown. TE")
+    const term = tidy(en).replace(/([.?!])(?:\s*[^\sA-Za-z0-9]{1,3}|\s+\S{1,2}){1,3}$/, '$1');
     const meaning = tidy(ko || '');
     return { term, meaning, kind: 'example', ref: ref || '', include: !!(term && meaning) };
   }
 
-  // ---------- 번호가 매겨진 단어장 (예: 미친토익) ----------
+  // ---------- 번호가 매겨진 단어장 (R/C: "11. steadily 꾸준히", L/C 표: "1 merchandise (명) 상품") ----------
+  const ENTRY_RE2 = /^[\(\[]?\s*[Il|]?(\d{1,3})\s+(?=[A-Za-z~])/;       // 번호 뒤 점 없는 형식
+  const PHRASE_MARK = /^>\s*/;                                            // "> promotional merchandise"
+  const POS_KO = /^[\(\[]?\s*(명|동|형|부|전|접|대|감)\s*[\)\]]/;           // "(명) 상품" 품사 표시
+  const SYN_RE = /^[=≒≈]\s*[A-Za-z]/;                                     // "= PR"
+  const koreanLed = (l) => /^[(\[]?\s*[가-힣]/.test(l) || /[A-Za-z]{2,}[가-힣]/.test(l);
+  function stripHead(l) { return ENTRY_RE.test(l) ? l.replace(ENTRY_RE, '') : l.replace(ENTRY_RE2, ''); }
+  function hasNumber(l) { return ENTRY_RE.test(l) || ENTRY_RE2.test(l); }
+  function isHeadLine(l) {
+    if (PHRASE_MARK.test(l)) return false;
+    if (ENTRY_RE.test(l)) return true;
+    const m = l.match(ENTRY_RE2);
+    const body = m ? l.slice(m[0].length) : l;
+    const sp = hasHangul(body) ? splitEnKo(body) : null;
+    const en = sp ? sp.en : body;
+    if (!hasLatin(en) || isSentence(stripForProbe(en))) return false;
+    if (m) return true;
+    // OCR이 번호를 놓쳐도 "(명)" 같은 품사로 시작하는 뜻이 붙어 있으면 표제어로 봄
+    return !!(sp && POS_KO.test(sp.ko) && latinCount(en) >= 2 && !koreanLed(body));
+  }
+
   function parseNumbered(lines) {
     const out = [];
-    let block = null;
     const blocks = [];
+    let block = null;
     for (const l of lines) {
-      if (ENTRY_RE.test(l)) { block = { head: l.replace(ENTRY_RE, ''), rest: [] }; blocks.push(block); }
+      if (isHeadLine(l)) { block = { head: stripHead(l), rest: [] }; blocks.push(block); }
       else if (block) block.rest.push(l);
     }
     for (const b of blocks) {
-      let head = b.head;
-      let word;
-      const sp = hasHangul(head) ? splitEnKo(head) : null;
-      const rest = b.rest.slice();
-      if (sp) {
-        word = makeWord(sp.en, sp.ko);
-        // 뜻이 "," "(" "=" 등으로 끝나 다음 줄로 이어지는 경우만 이어붙임
-        while (rest.length && /[,;(=\/]$/.test(word.meaning) && rest[0].length < 40 && !(!isKoreanLine(rest[0]) && isSentence(rest[0]))) {
-          word.meaning = tidy(word.meaning + ' ' + rest.shift());
-          word.include = !!(word.term && word.meaning);
-        }
-      } else {
-        word = makeWord(head, '');
-        if (rest.length && isKoreanLine(rest[0])) {
-          word.meaning = tidy(rest.shift()); word.include = !!(word.term && word.meaning);
-        }
-      }
-      if (word.term) out.push(word);
-
-      // 나머지: [영어 줄들][한국어 줄들] 반복 → 예문 + 해석
-      let en = '', ko = '';
-      const flush = () => {
-        if (en) out.push(makeExample(en, ko, word.term));
-        en = ''; ko = '';
+      const sp = hasHangul(b.head) ? splitEnKo(b.head) : null;
+      const head = makeWord(sp ? sp.en : b.head, sp ? sp.ko : '');
+      if (!head.term) continue;
+      out.push(head);
+      let pend = null;      // 뜻을 기다리는 영어 { en, phrase }
+      let last = head;      // 줄바꿈된 뜻/해석을 이어붙일 대상
+      let orphan = null;    // 표에서 예문보다 위에 걸쳐 있는 해석 첫 줄
+      const finish = (ko) => {
+        if (!pend) return;
+        if (!pend.phrase && orphan) { ko = tidy(orphan + ' ' + ko); orphan = null; }
+        const it = pend.phrase ? makeWord(pend.en, ko) : makeExample(pend.en, ko, head.term);
+        if (it.term) { out.push(it); last = it; }
+        pend = null;
       };
-      for (const l of rest) {
-        if (isKoreanLine(l)) { ko = ko ? ko + ' ' + l : l; }
-        else if (hasLatin(l)) {
-          if (ko) flush();
-          en = joinEnglish(en, l);
+      const addKo = (l) => {
+        if (pend) return finish(l);
+        // 짧은 뜻(단어·숙어) 뒤에 오는 긴 한국어 줄 = 다음 예문 해석의 첫 줄
+        if (last.kind === 'word' && last.meaning && hangulCount(l) >= 10 && !/[.!?]$/.test(l)) { orphan = orphan ? orphan + ' ' + l : l; return; }
+        if (!last.meaning) last.meaning = tidy(l);
+        else if (!/[.!?]$/.test(last.meaning)) last.meaning = tidy(last.meaning + ' ' + l);  // 끝나지 않은 뜻만 이어붙임 (분류 제목 등은 무시)
+        last.include = !!(last.term && last.meaning);
+      };
+      for (const raw of b.rest) {
+        let l = raw, mark = false;
+        if (PHRASE_MARK.test(l)) { l = l.replace(PHRASE_MARK, ''); mark = true; }
+        if (!l) continue;
+        if (SYN_RE.test(l)) {
+          const syn = l.replace(/[가-힣(].*$/, '').trim();
+          head.meaning = tidy(head.meaning + ' (' + syn + ')');
+          head.include = !!(head.term && head.meaning);
+          continue;
         }
+        const K = hasHangul(l), E = hasLatin(l);
+        const pendSent = !!pend && !pend.phrase;
+        // 표에서 한 줄로 합쳐진 "…문장 끝부분. 해석" (앞 줄 예문의 이어짐 + 해석)
+        if (K && E && pendSent && !mark && !endsSentence(pend.en) && !koreanLed(l)) {
+          const s2 = splitEnKo(l);
+          if (s2 && /[.?!]["']?$/.test(s2.en)) { pend.en = joinEnglish(pend.en, s2.en); finish(s2.ko); continue; }
+        }
+        if (K && (!E || (pendSent && !mark) || koreanLed(l))) { addKo(l); continue; }
+        if (K && E) {
+          const s2 = splitEnKo(l);
+          if (s2) {
+            if (pend) finish('');
+            pend = { en: s2.en, phrase: mark || !isSentence(stripForProbe(s2.en)) };
+            finish(s2.ko);
+          } else addKo(l);
+          continue;
+        }
+        // 영어만 있는 줄
+        if (pend && !pend.phrase && !mark && !endsSentence(pend.en)) { pend.en = joinEnglish(pend.en, l); continue; }
+        if (pend) finish('');
+        pend = { en: l, phrase: mark || !isSentence(stripForProbe(l)) };
       }
-      flush();
+      finish('');
+      if (orphan) { last.meaning = tidy(last.meaning + ' ' + orphan); last.include = !!(last.term && last.meaning); }
     }
     return out;
+  }
+
+  // ---------- 영어 칸 / 한국어 칸이 따로 읽힌 표 (아이폰 텍스트 인식 등) ----------
+  // 영어 줄들과 한국어 줄들을 각각 순서대로 모은 뒤 하나씩 짝지음
+  function parseSeparated(enLines, koLines) {
+    const items = [];
+    for (const raw of enLines) {
+      let l = raw, mark = false;
+      if (PHRASE_MARK.test(l)) { l = l.replace(PHRASE_MARK, ''); mark = true; }
+      if (!l || !hasLatin(l)) continue;
+      const prev = items[items.length - 1];
+      if (SYN_RE.test(l)) { items.push({ type: 'syn', en: l }); continue; }
+      if (!mark && hasNumber(l) && !isSentence(stripForProbe(stripHead(l)))) { items.push({ type: 'head', en: stripHead(l) }); continue; }
+      if (prev && prev.type === 'sentence' && !mark && !endsSentence(prev.en)) { prev.en = joinEnglish(prev.en, l); continue; }
+      items.push({ type: mark || !isSentence(stripForProbe(l)) ? 'phrase' : 'sentence', en: l });
+    }
+    const ko = koLines.filter((l) => hasHangul(l));
+    let k = 0;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.type === 'syn') continue;
+      if (k >= ko.length) { it.ko = ''; continue; }
+      if (it.type === 'sentence') {
+        let s = ko[k++];
+        while (k < ko.length && !/[.!?]$/.test(s) && !POS_KO.test(ko[k])) s += ' ' + ko[k++];
+        it.ko = s;
+      } else if (it.type === 'head' && !POS_KO.test(ko[k]) && k + 1 < ko.length && POS_KO.test(ko[k + 1])) {
+        k++; it.ko = ko[k++];               // 품사 표시로 다시 맞추기 (한 줄 밀린 경우)
+      } else it.ko = ko[k++];
+    }
+    const out = [];
+    let head = null;
+    for (const it of items) {
+      if (it.type === 'syn') { if (head) { head.meaning = tidy(head.meaning + ' (' + it.en.replace(/[가-힣(].*$/, '').trim() + ')'); head.include = !!(head.term && head.meaning); } continue; }
+      if (it.type === 'sentence') out.push(makeExample(it.en, it.ko, head ? head.term : ''));
+      else { const w = makeWord(it.en, it.ko); if (it.type === 'head') head = w; if (w.term) out.push(w); }
+    }
+    return out;
+  }
+
+  // 페이지 머리글로 L/C·R/C 판별
+  function detectSection(text) {
+    const t = String(text || '');
+    if (/R\s*[\/|]?\s*C\s*Vocab/i.test(t)) return 'RC';
+    if (/L\s*[\/|]?\s*C\s*\d{1,2}\s*일\s*차/i.test(t) || /L\s*[\/|]?\s*C\s*Vocab/i.test(t)) return 'LC';
+    if (/R\s*[\/|]?\s*C\s*\d{1,2}\s*일\s*차/i.test(t)) return 'RC';
+    // 머리글이 안 읽힌 경우 구조로 판단: "> 숙어"·"(명)" 표시가 여러 번 → L/C 표, "11. word" 번호 형식 → R/C
+    const lines = t.split(/\r?\n/).map((x) => x.trim());
+    const lcMarks = lines.filter((x) => /^[>›»]\s*[A-Za-z]/.test(x) || /\((명|동|형|부)\)/.test(x)).length;
+    const rcMarks = lines.filter((x) => /^\d{1,3}\.\s*[A-Za-z]/.test(x)).length;
+    if (lcMarks >= 3 && lcMarks > rcMarks) return 'LC';
+    if (rcMarks >= 3 && lcMarks === 0) return 'RC';
+    return null;
   }
 
   // ---------- 번호 없는 일반 단어장 ----------
@@ -461,15 +568,30 @@ const VocabParser = (() => {
     return out.filter((e) => e.term);
   }
 
-  function parse(text) {
-    const lines = (Array.isArray(text) ? text : String(text).split(/\r?\n/))
-      .map(normalize)
-      .filter((l) => l && !isNoise(l));
-    const numbered = lines.filter((l) => ENTRY_RE.test(l)).length;
+  const toLines = (text) => (Array.isArray(text) ? text : String(text).split(/\r?\n/))
+    .map(normalize).filter((l) => l && !isNoise(l));
+
+  // opts.section: 'LC' 이면 영어/한국어 칸이 따로 읽힌 표도 자동으로 짝지음
+  function parse(text, opts) {
+    const lines = toLines(text);
+    const section = opts && opts.section;
+    if (section === 'LC' && !(opts && opts.fromOCR)) {
+      const enOnly = lines.filter((l) => hasLatin(l) && !hasHangul(l)).length;
+      const koOnly = lines.filter((l) => hasHangul(l) && (!hasLatin(l) || koreanLed(l))).length;
+      const mixed = lines.filter((l) => hasHangul(l) && hasLatin(l) && !koreanLed(l)).length;
+      if (enOnly >= 3 && koOnly >= 3 && mixed <= Math.max(1, (enOnly + mixed) * 0.2)) {
+        const first = lines.findIndex((l) => hasNumber(l) && isHeadLine(l));
+        const body = first >= 0 ? lines.slice(first) : lines;
+        return parseSeparated(body.filter((l) => hasLatin(l) && !(hasHangul(l) && koreanLed(l))), body.filter((l) => hasHangul(l) && (!hasLatin(l) || koreanLed(l))));
+      }
+    }
+    const numbered = lines.filter((l) => hasNumber(l) && isHeadLine(l)).length;
     return numbered >= 2 ? parseNumbered(lines) : parseGeneric(lines);
   }
+  // 영어 칸 / 한국어 칸을 따로 붙여넣은 경우
+  function parseColumns(enText, koText) { return parseSeparated(toLines(enText), toLines(koText)); }
 
-  return { parse, normalize, isKoreanLine, hangulCount, latinCount, hasHangul };
+  return { parse, parseColumns, detectSection, normalize, isKoreanLine, hangulCount, latinCount, hasHangul };
 })();
 
 
@@ -536,17 +658,21 @@ const Store = {
 };
 
 /* ================= 상태 ================= */
+function loadSection() { try { return localStorage.getItem('toeic-voca-section') === 'LC' ? 'LC' : 'RC'; } catch (e) { return 'RC'; } }
+const SEC = { LC: 'L/C', RC: 'R/C' };
+const secOf = (it) => (it.section === 'LC' ? 'LC' : 'RC');
+const kindLabel = (it) => `${SEC[secOf(it)]} ${it.kind === 'word' ? '단어' : '예문'}`;
 const S = {
   tab: 'study', items: [], current: null, revealed: false, last: null,
-  reg: { queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false },
+  reg: { queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false, section: loadSection(), split: false, enText: '', koText: '' },
   list: { q: '', filter: 'all', limit: 80 },
 };
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-const keyOf = (term, kind) => kind + '|' + term.toLowerCase().replace(/\s+/g, ' ').trim();
+const keyOf = (term, kind, section) => (section === 'LC' ? 'LC' : 'RC') + '|' + kind + '|' + term.toLowerCase().replace(/\s+/g, ' ').trim();
 const accOf = (it) => (it.attempts >= 2 ? it.correct / it.attempts : null);
 const pct = (v) => Math.round(v * 100) + '%';
 function newItem(e) {
-  return { id: uid(), term: e.term.trim(), meaning: e.meaning.trim(), kind: e.kind, ref: e.ref || '', weight: 1, attempts: 0, correct: 0, createdAt: Date.now(), lastSeen: 0 };
+  return { id: uid(), term: e.term.trim(), meaning: e.meaning.trim(), kind: e.kind, section: e.section === 'LC' ? 'LC' : 'RC', ref: e.ref || '', weight: 1, attempts: 0, correct: 0, createdAt: Date.now(), lastSeen: 0 };
 }
 
 /* ================= DOM 도우미 ================= */
@@ -615,19 +741,63 @@ function speak(text) {
 }
 
 /* ================= 암기 화면 ================= */
-function highlightSentence(sentence, ref) {
-  const frag = document.createDocumentFragment();
-  const r = (ref || '').toLowerCase().replace(/[^a-z\s-]/g, '').trim().split(/\s+/)[0] || '';
-  if (r.length >= 3) {
-    const stem = r.length <= 4 ? r : r.slice(0, Math.max(4, r.length - 2));
-    const re = new RegExp('\\b(' + stem.replace(/[-]/g, '\\-') + '[A-Za-z]*)', 'i');
-    const m = sentence.match(re);
-    if (m) {
-      frag.append(sentence.slice(0, m.index), h('span', { class: 'hl' }, m[1]), sentence.slice(m.index + m[1].length));
-      return frag;
-    }
+// ---------- 예문 형광펜: 영어 문장의 표제어/숙어 ↔ 한글 해석의 해당 뜻 ----------
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// 단어 뜻 "(명) 상품, 제품" → ["상품", "제품"]
+function koCandidates(meaning) {
+  const m = (meaning || '')
+    .replace(/\[[^\]]*\]/g, ' ').replace(/\(\s*=[^)]*\)/g, ' ').replace(/[≠=][^,;/]*/g, ' ')
+    .replace(/\(?\s*(명|동|형|부|전|접|대)\s*\)\s*/g, ' ')
+    .replace(/\b(n|v|vt|vi|adj|adv|a|ad|prep|conj|pron|phr)\.\s*/gi, ' ')
+    .replace(/\([가-힣\s~]*\)/g, ' ').replace(/[()~]/g, ' ');
+  return m.split(/[,;/·]+/).map((x) => x.replace(/[^가-힣\s]/g, '').replace(/\s+/g, ' ').trim()).filter((x) => x.replace(/ /g, '').length >= 2);
+}
+// 어미를 뗀 줄기 + (3글자 이상이면) 앞·뒤 두 글자
+function koStems(c) {
+  const out = [];
+  const st = c.replace(/(시키다|하다|되다|하는|되는|적인|이다|한|된|적|의|히|다)$/, '').trim();
+  if (st !== c && st.replace(/ /g, '').length >= 2) out.push({ t: st, extend: true });       // 활용 어미까지 표시
+  const core = st.replace(/ /g, '');
+  if (core.length >= 3) out.push({ t: core.slice(0, 2), extend: false }, { t: core.slice(-2), extend: false });   // 조사는 빼고 표시
+  return out;
+}
+function findKo(trans, cands) {
+  for (const c of cands) { const i = trans.indexOf(c); if (i >= 0) return [i, i + c.length]; }       // 뜻 그대로
+  for (const c of cands) for (const st of koStems(c)) {                                               // 활용형 (면제하다 → 면제됩니다)
+    const i = trans.indexOf(st.t);
+    if (i >= 0) { let e = i + st.t.length; if (st.extend) while (e < trans.length && /[가-힣]/.test(trans[e])) e++; return [i, e]; }
   }
-  frag.append(sentence); return frag;
+  return null;
+}
+function exampleHighlight(it) {
+  const sent = it.term, low = sent.toLowerCase(), sec = secOf(it);
+  const words = S.items.filter((w) => w.kind === 'word' && secOf(w) === sec);
+  const base = (w) => w.term.replace(/\([^)]*\)/g, '').replace(/~/g, '').trim().toLowerCase();
+  let cands = words.filter((w) => base(w).length >= 3 && new RegExp('\\b' + escRe(base(w))).test(low));
+  const head = it.ref ? words.find((w) => w.term.toLowerCase() === it.ref.toLowerCase()) : null;
+  if (head && !cands.includes(head)) cands.push(head);
+  cands.sort((a, b) => base(b).length - base(a).length);   // 긴 숙어부터 (promotional merchandise > merchandise)
+  const enRange = (w) => {
+    const b = base(w);
+    let m = new RegExp('\\b' + escRe(b) + '[a-z]*', 'i').exec(sent);
+    if (!m && b.length > 4 && !b.includes(' ')) m = new RegExp('\\b' + escRe(b.slice(0, Math.max(4, b.length - 2))) + '[a-z]*', 'i').exec(sent);
+    return m ? [m.index, m.index + m[0].length] : null;
+  };
+  let en = null, ko = null;
+  for (const w of cands) {
+    const e = enRange(w), k = findKo(it.meaning, koCandidates(w.meaning));
+    if (e && k) return { en: e, ko: k };
+    if (!en && e) en = e;
+    if (!ko && k) ko = k;
+  }
+  if (!en && it.ref) en = enRange({ term: it.ref });
+  return { en, ko };
+}
+function markRange(text, range) {
+  const frag = document.createDocumentFragment();
+  if (!range) { frag.append(text); return frag; }
+  frag.append(text.slice(0, range[0]), h('span', { class: 'hl' }, text.slice(range[0], range[1])), text.slice(range[1]));
+  return frag;
 }
 function renderStudy(animate) {
   if (!S.items.length) {
@@ -643,6 +813,7 @@ function renderStudy(animate) {
   const solved = S.items.filter((i) => i.attempts > 0).length;
   const acc = accOf(it);
   const isEx = it.kind === 'example';
+  const marks = isEx ? exampleHighlight(it) : null;
 
   const hdr = h('div', { class: 'hdr' },
     h('div', { class: 'count', 'aria-label': `전체 ${S.items.length}개 중 ${solved}개 풀이` }, String(solved), h('small', null, '/' + S.items.length)),
@@ -650,17 +821,17 @@ function renderStudy(animate) {
       ? h('div', { class: 'acc' }, h('div', { class: 'lab' }, '정답률'), h('div', { class: 'val', style: `color:${acc >= .8 ? 'var(--ok)' : acc >= .5 ? 'var(--ex)' : 'var(--no)'}` }, pct(acc)), h('div', { class: 'sub' }, `${it.correct}/${it.attempts}회`))
       : h('div', { class: 'acc' }, h('span', { class: 'tagnew' }, it.attempts === 0 ? 'NEW' : '1회 풀이')),
     h('div', { class: 'hdr-right' }, h('button', { class: 'speak', 'aria-label': '발음 듣기', html: I.speak, onclick: () => speak(it.term) })));
-  const badgeRow = h('div', { class: 'badge-row' }, h('span', { class: 'badge ' + it.kind }, isEx ? '예문' : '단어'));
+  const badgeRow = h('div', { class: 'badge-row' }, h('span', { class: 'badge sec-' + secOf(it) }, SEC[secOf(it)]));
 
   const q = h('section', { class: 'qcard' + (animate ? ' enter' : ''), 'aria-live': 'polite' },
-    isEx ? h('div', { class: 'term-ex' + (it.term.length > 120 ? ' long' : '') }, highlightSentence(it.term, it.ref))
+    isEx ? h('div', { class: 'term-ex' + (it.term.length > 120 ? ' long' : '') }, markRange(it.term, marks.en))
          : h('div', { class: 'term-word' }, h('span', { class: 'hl' }, it.term)));
 
   const a = h('section', { class: 'acard' + (S.revealed ? ' open' : ''), role: 'button', tabindex: '0', 'aria-label': '뜻 보기',
       onclick: () => { S.revealed = !S.revealed; render(); },
       onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); S.revealed = !S.revealed; render(); } } },
     S.revealed
-      ? [h('div', { class: 'meaning' + (isEx ? ' ex' : '') }, it.meaning), isEx && it.ref ? h('div', { class: 'ref' }, '핵심 단어 ', h('b', null, it.ref)) : null]
+      ? [h('div', { class: 'meaning' + (isEx ? ' ex' : '') }, isEx ? markRange(it.meaning, marks.ko) : it.meaning), isEx && it.ref ? h('div', { class: 'ref' }, '핵심 단어 ', h('b', null, it.ref)) : null]
       : h('div', { class: 'hint' }, h('span', { html: I.tap }), '탭해서 뜻 보기'));
 
   const ox = h('div', { class: 'ox' },
@@ -687,8 +858,14 @@ The company will reimburse employees for their travel expenses.
 The conference featured several prominent speakers from the industry.
 그 회의에는 업계의 여러 유명 연사들이 참석했다.`;
 
+const SAMPLE_LC = `1 reservation  (명) 예약
+> make a reservation  예약하다
+I'd like to make a reservation for two at seven.  7시에 두 명 예약하고 싶어요.
+2 advertise  (동) 광고하다
+> advertise a product  제품을 광고하다
+The company advertised its new service on the radio.  그 회사는 라디오에 새 서비스를 광고했다.`;
 async function loadSampleToStudy() {
-  const entries = VocabParser.parse(SAMPLE).filter((e) => e.include);
+  const entries = VocabParser.parse(SAMPLE).filter((e) => e.include).map((e) => ({ ...e, section: 'RC' }));
   const n = await saveEntries(entries);
   toast(`예시 ${n}개를 넣었어요. 단어장 탭에서 언제든 지울 수 있어요.`);
   render(true);
@@ -698,21 +875,34 @@ function renderAdd() {
   const R = S.reg;
   const wrap = h('div', { class: 'scroll' });
   wrap.append(h('h1', { class: 'h1' }, '단어 등록'));
+  const isLC = R.section === 'LC';
+  wrap.append(h('div', { class: 'seg secseg', role: 'group', 'aria-label': '단어장 종류' },
+    [['LC', 'L/C 단어장', '표 형식'], ['RC', 'R/C 단어장', 'R/C Vocab']].map(([k, lab, sub2]) =>
+      h('button', { 'data-sec': k, 'aria-pressed': String(R.section === k), onclick: () => { setSection(k); render(); } }, h('b', null, lab), h('small', null, sub2)))));
 
   const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, 'aria-label': '단어장 사진 선택', onchange: (e) => onFiles(e.target.files) });
-  wrap.append(h('div', { class: 'sources' },
-    h('label', { class: 'src' }, h('div', { class: 'ic', html: I.camera }), h('b', null, '사진으로 인식'), h('span', null, '촬영 또는 앨범 선택\n여러 장 가능'), fileInput),
-    h('button', { class: 'src', onclick: () => { R.showText = true; render(); setTimeout(() => { const t = document.getElementById('rawText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center' }); } }, 50); } },
-      h('span', { class: 'rec' }, '정확도 최고'), h('div', { class: 'ic', html: I.text }), h('b', null, '텍스트 붙여넣기'), h('span', null, '아이폰 텍스트 인식으로\n복사한 내용'))));
+  const openText = () => { R.showText = true; render(); setTimeout(() => { const t = document.getElementById(R.split && isLC ? 'enText' : 'rawText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center' }); } }, 50); };
+  wrap.append(h('div', { class: 'sources', style: 'margin-top:12px' },
+    h('label', { class: 'src' }, isLC ? h('span', { class: 'rec' }, '표 추천') : null, h('div', { class: 'ic', html: I.camera }), h('b', null, '사진으로 인식'), h('span', null, isLC ? '왼쪽·오른쪽 칸을\n줄마다 자동으로 짝지음' : '촬영 또는 앨범 선택\n여러 장 가능'), fileInput),
+    h('button', { class: 'src', onclick: openText },
+      !isLC ? h('span', { class: 'rec' }, '정확도 최고') : null, h('div', { class: 'ic', html: I.text }), h('b', null, '텍스트 붙여넣기'), h('span', null, '아이폰 텍스트 인식으로\n복사한 내용'))));
 
-  wrap.append(h('div', { class: 'section' }, h('details', { class: 'tip' },
-    h('summary', null, '아이폰 텍스트 인식으로 더 정확하게'),
-    h('ol', { class: 'steps' },
-      h('li', null, '단어장 페이지를 기본 ', h('b', null, '카메라'), '로 찍어요.'),
-      h('li', null, h('b', null, '사진'), ' 앱에서 그 사진을 열고 글자를 ', h('b', null, '길게 눌러요'), '.'),
-      h('li', null, h('b', null, '전체 선택'), ' → ', h('b', null, '복사'), '를 눌러요.'),
-      h('li', null, '여기 ', h('b', null, '텍스트 붙여넣기'), '에 붙여넣고 ', h('b', null, '분석하기'), '를 눌러요.')),
-    h('p', { class: 'note' }, '아이폰 자체 인식 기능이라 기기 안에서 처리되고, 한글 정확도가 가장 높아요.'))));
+  wrap.append(h('div', { class: 'section' }, isLC
+    ? h('details', { class: 'tip' },
+        h('summary', null, '표 형식(L/C) 단어장 등록 요령'),
+        h('ol', { class: 'steps' },
+          h('li', null, h('b', null, '사진으로 인식'), '이 가장 잘 맞아요. 영어 칸과 한국어 칸을 같은 줄끼리 자동으로 짝지어요.'),
+          h('li', null, '아이폰 텍스트 인식으로 페이지 전체를 복사해 붙여넣어도 돼요. 칸이 따로 읽혀도 순서대로 짝지어요.'),
+          h('li', null, '짝이 어긋나면 ', h('b', null, '칸 따로 붙여넣기'), '를 켜요. 사진 앱 ', h('b', null, '편집 → 자르기'), '로 왼쪽 칸만 남겨 복사해 영어 칸에, 다시 오른쪽 칸만 남겨 복사해 한국어 칸에 붙여넣어요. (자르기는 ', h('b', null, '복귀'), '로 원래대로 돌아와요)')),
+        h('p', { class: 'note' }, '번호 단어 · "> 숙어" · "= 동의어" · 예문을 구분해서 가져와요.'))
+    : h('details', { class: 'tip' },
+        h('summary', null, '아이폰 텍스트 인식으로 더 정확하게'),
+        h('ol', { class: 'steps' },
+          h('li', null, '단어장 페이지를 기본 ', h('b', null, '카메라'), '로 찍어요.'),
+          h('li', null, h('b', null, '사진'), ' 앱에서 그 사진을 열고 글자를 ', h('b', null, '길게 눌러요'), '.'),
+          h('li', null, h('b', null, '전체 선택'), ' → ', h('b', null, '복사'), '를 눌러요.'),
+          h('li', null, '여기 ', h('b', null, '텍스트 붙여넣기'), '에 붙여넣고 ', h('b', null, '분석하기'), '를 눌러요.')),
+        h('p', { class: 'note' }, '아이폰 자체 인식 기능이라 기기 안에서 처리되고, 한글 정확도가 가장 높아요.'))));
 
   if (R.cur && !R.busy) wrap.append(renderCrop());
 
@@ -721,22 +911,61 @@ function renderAdd() {
     h('div', { class: 'prog' }, h('i', { style: `width:${Math.round(R.progress * 100)}%` })),
     h('p', { class: 'note' }, '처음 한 번은 인식 엔진을 준비하느라 조금 더 걸려요. 그 다음부터는 바로 시작돼요.'))));
 
-  if (R.showText || R.raw) {
-    const ta = h('textarea', { class: 'raw', id: 'rawText', placeholder: '여기에 단어장 텍스트를 붙여넣으세요.\n\n예)\n11. steadily 꾸준히, 끊임없이\nSales of electronic equipment have been ...\n전자장비의 판매는 꾸준히 ...', oninput: (e) => { R.raw = e.target.value; } });
-    ta.value = R.raw;
+  if (R.showText || R.raw || R.enText || R.koText) {
+    const useSplit = isLC && R.split;
+    const box = h('div', { class: 'panel' });
+    if (isLC) box.append(h('div', { class: 'toggle', style: 'margin:0 0 10px;justify-content:space-between' }, '칸 따로 붙여넣기 (영어 칸 / 한국어 칸)',
+      h('button', { class: 'switch', role: 'switch', 'aria-checked': String(R.split), 'aria-label': '칸 따로 붙여넣기', onclick: () => { R.split = !R.split; render(); } })));
+    if (useSplit) {
+      const en = h('textarea', { class: 'raw', id: 'enText', style: 'min-height:120px', placeholder: '왼쪽 영어 칸 텍스트\n\n예)\n1 reservation\n> make a reservation\nI want to make a reservation for two.', oninput: (e) => { R.enText = e.target.value; } });
+      const ko = h('textarea', { class: 'raw', id: 'koText', style: 'min-height:120px', placeholder: '오른쪽 한국어 칸 텍스트\n\n예)\n(명) 예약\n예약하다\n두 명 예약하고 싶어요.', oninput: (e) => { R.koText = e.target.value; } });
+      en.value = R.enText; ko.value = R.koText;
+      box.append(h('div', { class: 'form-l', style: 'margin-top:0' }, '영어 칸'), en, h('div', { class: 'form-l' }, '한국어 칸'), ko);
+    } else {
+      const ta = h('textarea', { class: 'raw', id: 'rawText', placeholder: isLC ? '여기에 표 형식 단어장 텍스트를 붙여넣으세요.\n\n예)\n1 reservation (명) 예약\n> make a reservation 예약하다\n...' : '여기에 단어장 텍스트를 붙여넣으세요.\n\n예)\n1. allocate 할당하다, 배분하다\nThe manager allocated additional funds ...\n매니저는 추가 자금을 할당했다.', oninput: (e) => { R.raw = e.target.value; } });
+      ta.value = R.raw;
+      box.append(ta);
+    }
+    const hasText = useSplit ? (R.enText || R.koText) : R.raw;
+    box.append(h('div', { class: 'row-btns' },
+      h('button', { class: 'btn primary sm', onclick: analyzeText }, R.entries.length ? '다시 분석' : '분석하기'),
+      !hasText ? h('button', { class: 'btn ghost sm', onclick: () => { if (useSplit) { const rows = SAMPLE_LC.split('\n').map((l) => l.split(/\s{2,}/)); R.enText = rows.map((r) => r[0]).join('\n'); R.koText = rows.map((r) => r[1] || '').join('\n'); } else R.raw = isLC ? SAMPLE_LC : SAMPLE; render(); } }, '예시 넣어보기') : null,
+      hasText ? h('button', { class: 'btn ghost sm', onclick: () => { if (useSplit) { R.enText = R.koText = ''; } else R.raw = ''; render(); } }, '지우기') : null));
     wrap.append(h('div', { class: 'section' },
-      h('h3', null, R.entries.length ? '인식 원문 (고친 뒤 다시 분석할 수 있어요)' : '텍스트'),
-      h('div', { class: 'panel' }, ta,
-        h('div', { class: 'row-btns' },
-          h('button', { class: 'btn primary sm', onclick: () => { const r = VocabParser.parse(R.raw); R.entries = r; render(); if (!r.length) toast('단어를 찾지 못했어요. 형식을 확인해 주세요.'); else toast(`${r.length}개를 찾았어요`); } }, R.entries.length ? '다시 분석' : '분석하기'),
-          !R.raw ? h('button', { class: 'btn ghost sm', onclick: () => { R.raw = SAMPLE; render(); } }, '예시 넣어보기') : null,
-          R.raw ? h('button', { class: 'btn ghost sm', onclick: () => { R.raw = ''; render(); } }, '지우기') : null))));
+      h('h3', null, R.entries.length ? '인식 원문 (고친 뒤 다시 분석할 수 있어요)' : '텍스트'), box));
   }
 
   if (R.entries.length) wrap.append(renderEntries());
   return [wrap, R.entries.length ? renderSaveBar() : null];
 }
 
+function setSection(k, auto) {
+  const R = S.reg;
+  if (R.section === k) return;
+  R.section = k;
+  try { localStorage.setItem('toeic-voca-section', k); } catch (e) {}
+  R.entries.forEach((e) => (e.section = k));
+  if (auto) toast(`${SEC[k]} 단어장 페이지로 인식했어요`);
+}
+// L/C 표의 품사 표시 "(명)" 에서 앞 괄호가 빠진 경우 복구
+function fixEntry(e) {
+  if (e.kind === 'word' && VocabParser.latinCount(e.term) < 3) e.include = false;   // "UJ" 같은 그림 조각은 체크 해제
+  if (e.section === 'LC' && e.meaning) e.meaning = e.meaning.replace(/^(명|동|형|부|전|접|대)\)\s*/, '($1) ');
+  return e;
+}
+function analyzeText() {
+  const R = S.reg;
+  let r;
+  if (R.section === 'LC' && R.split) r = VocabParser.parseColumns(R.enText, R.koText);
+  else {
+    const det = VocabParser.detectSection(R.raw);
+    if (det) setSection(det, det !== R.section);
+    r = VocabParser.parse(R.raw, { section: R.section });
+  }
+  R.entries = r.map((e) => fixEntry({ ...e, section: R.section }));
+  render();
+  if (!r.length) toast('단어를 찾지 못했어요. 형식을 확인해 주세요.'); else toast(`${r.length}개를 찾았어요`);
+}
 function renderEntries() {
   const R = S.reg;
   const allOn = R.entries.every((e) => e.include);
@@ -763,8 +992,8 @@ function renderEntries() {
         h('button', { class: 'btn ghost sm', onclick: () => { R.entries.forEach((x) => (x.include = !allOn)); render(); } }, allOn ? '전체 해제' : '전체 선택'),
         h('button', { class: 'btn ghost sm', onclick: () => { R.entries = []; R.raw = ''; R.showText = false; render(); } }, '비우기'))),
     box,
-    h('button', { class: 'btn ghost sm', style: 'margin-top:10px', onclick: () => { R.entries.push({ term: '', meaning: '', kind: 'word', include: true }); render(); } }, h('span', { html: I.plus }), '직접 추가'),
-    h('p', { class: 'note' }, '배지를 누르면 단어/예문이 바뀌어요. 뜻이 비어 있는 항목은 저장되지 않아요. 이미 있는 단어는 자동으로 건너뛰어요.'));
+    h('button', { class: 'btn ghost sm', style: 'margin-top:10px', onclick: () => { R.entries.push({ term: '', meaning: '', kind: 'word', section: R.section, include: true }); render(); } }, h('span', { html: I.plus }), '직접 추가'),
+    h('p', { class: 'note' }, `${SEC[R.section]} 단어장으로 저장돼요. 배지를 누르면 단어/예문이 바뀌어요. 뜻이 비어 있는 항목은 저장되지 않아요. 이미 있는 단어는 자동으로 건너뛰어요.`));
 }
 const selectedCount = () => S.reg.entries.filter((e) => e.include && e.term.trim() && e.meaning.trim()).length;
 function renderSaveBar() {
@@ -774,14 +1003,15 @@ function renderSaveBar() {
 function updateSaveBar() { const b = document.getElementById('saveBtn'); if (!b) return; const n = selectedCount(); b.textContent = `${n}개 저장하기`; b.disabled = n === 0; }
 
 async function saveEntries(entries) {
-  const known = new Set(S.items.map((i) => keyOf(i.term, i.kind)));
+  const known = new Set(S.items.map((i) => keyOf(i.term, i.kind, i.section)));
   const fresh = [];
   for (const e of entries) {
     if (!e.include) continue;
     const t = (e.term || '').trim(), m = (e.meaning || '').trim();
     if (!t || !m) continue;
-    const k = keyOf(t, e.kind); if (known.has(k)) continue;
-    known.add(k); fresh.push(newItem({ ...e, term: t, meaning: m }));
+    const sec = e.section || S.reg.section;
+    const k = keyOf(t, e.kind, sec); if (known.has(k)) continue;
+    known.add(k); fresh.push(newItem({ ...e, section: sec, term: t, meaning: m }));
   }
   S.items.push(...fresh);
   await Store.putMany(fresh).catch(() => showWarn('저장에 실패했어요. 백업을 내보내 두세요.'));
@@ -885,7 +1115,7 @@ function renderCrop() {
 }
 
 /* ---------- 이미지 전처리: 회전·자르기·확대 → 회색조 → 조명 평탄화 → 대비 ---------- */
-function preprocess(C) {
+function preprocess(C, section) {
   const [rw, rh] = rotatedSize(C.img, C.rot);
   const cw = C.crop.w * rw, ch = C.crop.h * rh;
   let s = Math.min(2.2, Math.max(0.35, 2300 / cw));
@@ -931,10 +1161,70 @@ function preprocess(C) {
   acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= N * 0.4) { hi = v; break; } }
   if (hi - lo < 40) { lo = Math.max(0, hi - 120); }
   const lut = new Uint8ClampedArray(256);
-  for (let v = 0; v < 256; v++) { const t = Math.min(1, Math.max(0, (v - lo) / Math.max(1, hi - lo))); lut[v] = 255 * Math.pow(t, 1.5); }
+  for (let v = 0; v < 256; v++) { const t = Math.min(1, Math.max(0, (v - lo) / Math.max(1, hi - lo))); lut[v] = section === 'LC' ? 255 * Math.pow(Math.min(1, t / 0.72), 1.4) : 255 * Math.pow(t, 1.5); }  // L/C: 연한 회색 워터마크는 흰색으로
   for (let i = 0, j = 0; i < N; i++, j += 4) { const v = lut[g[i]]; d[j] = d[j + 1] = d[j + 2] = v; d[j + 3] = 255; }
+  if (section === 'LC') maskPictures(d, W, H);   // L/C 표 페이지의 사진·그림·QR만 지움 (R/C는 형광 띠 위 글자 보호)
   ctx.putImageData(id, 0, 0);
   return out;
+}
+// 표의 긴 가로·세로 선을 지움 (선에 붙은 첫 글자가 사라지는 문제 방지)
+function removeRulings(d, W, H) {
+  const dark = (x, y) => d[(y * W + x) * 4] < 120;
+  const wipe = (x, y) => { const k = (y * W + x) * 4; d[k] = d[k + 1] = d[k + 2] = 255; };
+  const vmin = Math.round(H * 0.025), hmin = Math.round(W * 0.05);
+  for (let x = 0; x < W; x++) {
+    let run = 0;
+    for (let y = 0; y <= H; y++) {
+      if (y < H && dark(x, y)) { run++; continue; }
+      if (run >= vmin) for (let yy = y - run; yy < y; yy++) { wipe(x, yy); if (x > 0) wipe(x - 1, yy); if (x < W - 1) wipe(x + 1, yy); }
+      run = 0;
+    }
+  }
+  for (let y = 0; y < H; y++) {
+    let run = 0;
+    for (let x = 0; x <= W; x++) {
+      if (x < W && dark(x, y)) { run++; continue; }
+      if (run >= hmin) for (let xx = x - run; xx < x; xx++) { wipe(xx, y); if (y > 0) wipe(xx, y - 1); if (y < H - 1) wipe(xx, y + 1); }
+      run = 0;
+    }
+  }
+}
+// 사진·그림·QR코드처럼 중간 톤이 넓게 뭉친 영역을 찾아 흰색으로 지움 (글자 인식 방해 요소 제거)
+function maskPictures(d, W, H) {
+  const cs = Math.max(12, Math.round(Math.min(W, H) / 90));   // 칸 크기
+  const gw = Math.ceil(W / cs), gh = Math.ceil(H / cs);
+  const pic = new Uint8Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    let mid = 0, dark = 0, n = 0;
+    const x1 = Math.min(W, (gx + 1) * cs), y1 = Math.min(H, (gy + 1) * cs);
+    for (let y = gy * cs; y < y1; y += 2) for (let x = gx * cs; x < x1; x += 2) {
+      const v = d[(y * W + x) * 4]; n++;
+      if (v < 70) dark++; else if (v < 215) mid++;
+    }
+    if (n && (mid / n > 0.28 || dark / n > 0.5)) pic[gy * gw + gx] = 1;
+  }
+  // 덩어리(연결 영역) 단위로 크기 판정
+  const seen = new Uint8Array(gw * gh), stack = [];
+  for (let i = 0; i < gw * gh; i++) {
+    if (!pic[i] || seen[i]) continue;
+    const cells = []; stack.push(i); seen[i] = 1;
+    let minx = gw, maxx = 0, miny = gh, maxy = 0;
+    while (stack.length) {
+      const c = stack.pop(); cells.push(c);
+      const cx = c % gw, cy = (c / gw) | 0;
+      minx = Math.min(minx, cx); maxx = Math.max(maxx, cx); miny = Math.min(miny, cy); maxy = Math.max(maxy, cy);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+        const j = ny * gw + nx; if (pic[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+      }
+    }
+    const bw = maxx - minx + 1, bh = maxy - miny + 1;
+    // 글자 줄은 가로로 길고 얇음 → 세로·가로 모두 큰 덩어리만 그림으로 판단
+    if (cells.length >= 14 && bw >= 4 && bh >= 4 && cells.length / (bw * bh) > 0.3) {
+      const X0 = minx * cs, Y0 = miny * cs, X1 = Math.min(W, (maxx + 1) * cs), Y1 = Math.min(H, (maxy + 1) * cs);   // 여백 없이 그림 칸만 (옆 칸 글자 보호)
+      for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) { const k = (y * W + x) * 4; d[k] = d[k + 1] = d[k + 2] = 255; }
+    }
+  }
 }
 function cropCanvas(src, x, y, w, hgt, pad) {
   const X = Math.max(0, Math.floor(x - pad)), Y = Math.max(0, Math.floor(y - pad));
@@ -966,6 +1256,14 @@ async function ensureOCR() {
 const JUNK = /^[|¦!\[\]{}_=:;'"`.,\-~\\*•]+$/;   // "/" 는 해석 구분자라 남김
 const isHg = (c) => !!c && /[가-힣]/.test(c);
 function cleanWords(words) {
+  // 떨어져 읽힌 마침표·쉼표는 바로 앞 단어에 붙임
+  const ws0 = [];
+  for (const w of words) {
+    const t = (w.text || '').trim(), p = ws0[ws0.length - 1];
+    if (p && /^[.,;:!?]+$/.test(t) && w.bbox.x0 - p.bbox.x1 < (p.bbox.y1 - p.bbox.y0) * 0.6) { p.text = p.text + t; p.bbox = { ...p.bbox, x1: w.bbox.x1 }; continue; }
+    ws0.push({ ...w });
+  }
+  words = ws0;
   const NUM = /^[\(\[]?\d{1,4}\s*[.,)\]]$/;   // 항목 번호는 손글씨 표시가 겹쳐 신뢰도가 낮아도 유지
   let ws = words.filter((w, i) => w.text && w.text.trim() && !JUNK.test(w.text.trim()) && (w.confidence >= 25 || (i <= 1 && NUM.test(w.text.trim()))));
   const hangulTotal = ws.reduce((a, w) => a + VocabParser.hangulCount(w.text), 0);
@@ -978,7 +1276,8 @@ function cleanWords(words) {
   return ws;
 }
 // 글자 사이 간격으로 한글 띄어쓰기 복원 (자간이 넓은 단어장 글꼴 대응)
-function joinWords(ws) {
+function joinWords(ws, thr) {
+  thr = thr || 0.62;
   if (!ws.length) return '';
   const hs = ws.filter((w) => VocabParser.hasHangul(w.text)).map((w) => w.bbox.y1 - w.bbox.y0);
   const arr = (hs.length ? hs : ws.map((w) => w.bbox.y1 - w.bbox.y0)).sort((a, b) => a - b);
@@ -987,7 +1286,7 @@ function joinWords(ws) {
   for (let i = 1; i < ws.length; i++) {
     const a = ws[i - 1], b = ws[i];
     const gap = (b.bbox.x0 - a.bbox.x1) / mh;
-    const join = gap < 0.62 && isHg(b.text[0]) && (isHg(a.text.slice(-1)) || /\d/.test(a.text.slice(-1)));
+    const join = gap < thr && isHg(b.text[0]) && (isHg(a.text.slice(-1)) || /\d/.test(a.text.slice(-1)));
     out += (join ? '' : ' ') + b.text;
   }
   return out;
@@ -1002,9 +1301,77 @@ async function refineEnglish(canvas, words, box) {
   const t = (data.text || '').replace(/\s+/g, ' ').trim();
   return { text: t, conf: data.confidence || 0 };
 }
-async function recognizeCanvas(canvas, onStep) {
+// 표 형식(왼쪽 영어 칸 · 오른쪽 한국어 칸)을 같은 높이끼리 한 줄로 합치고,
+// 글자 크기가 본문과 너무 다른 줄(제목·워터마크·그림 속 작은 글자)은 버림
+function mergeRows(rawLines) {
+  const good = rawLines.flatMap((l) => l.words || []).filter((w) => w.confidence > 60 && /[A-Za-z가-힣]{2,}/.test(w.text));
+  const hs = good.map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+  const med = hs.length ? hs[hs.length >> 1] : 0;
+  const mid = (arr) => arr.slice().sort((a, b) => a - b)[arr.length >> 1];
+  // 엔진이 서로 다른 높이의 두 줄을 한 줄로 묶은 경우 높이별로 다시 나눔
+  const split = [];
+  for (const l of rawLines) {
+    const ws = (l.words || []).filter((w) => w.text && w.text.trim()).sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1));
+    let cur = [];
+    for (const w of ws) {
+      const h = w.bbox.y1 - w.bbox.y0, yc = (w.bbox.y0 + w.bbox.y1) / 2;
+      if (cur.length) { const p = cur[cur.length - 1], pc = (p.bbox.y0 + p.bbox.y1) / 2; if (yc - pc > 0.6 * Math.max(h, p.bbox.y1 - p.bbox.y0)) { split.push({ words: cur }); cur = []; } }
+      cur.push(w);
+    }
+    if (cur.length) split.push({ words: cur.sort((a, b) => a.bbox.x0 - b.bbox.x0) });
+  }
+  rawLines = split;
+  let lines = rawLines.map((l) => {
+    const ws = (l.words || []).filter((w) => w.text && w.text.trim()).sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    if (!ws.length) return null;
+    return { words: ws, h: mid(ws.map((w) => w.bbox.y1 - w.bbox.y0)), yc: mid(ws.map((w) => (w.bbox.y0 + w.bbox.y1) / 2)),
+      x0: Math.min(...ws.map((w) => w.bbox.x0)), x1: Math.max(...ws.map((w) => w.bbox.x1)) };
+  }).filter(Boolean);
+  if (med) lines = lines.filter((L) => L.h >= med * 0.6 && L.h <= med * 1.9);
+  lines.sort((a, b) => a.yc - b.yc);
+  const rows = [];
+  for (const L of lines) {
+    const r = rows.find((R) => Math.abs(R.yc - L.yc) < 0.8 * Math.max(R.h, L.h) && R.segs.every((S) => L.x1 < S.x0 + 4 || L.x0 > S.x1 - 4));
+    if (r) { r.words = r.words.concat(L.words).sort((a, b) => a.bbox.x0 - b.bbox.x0); r.segs.push(L); }
+    else rows.push({ words: L.words.slice(), yc: L.yc, h: L.h, segs: [L] });
+  }
+  return rows.map((R) => ({ words: R.words, bbox: { x0: Math.min(...R.words.map((w) => w.bbox.x0)), y0: Math.min(...R.words.map((w) => w.bbox.y0)), x1: Math.max(...R.words.map((w) => w.bbox.x1)), y1: Math.max(...R.words.map((w) => w.bbox.y1)) } }));
+}
+// 페이지 전체의 한글 글자 사이 간격 분포에서 '글자 간격'과 '띄어쓰기'의 경계를 찾음 (글꼴마다 다름)
+function spacingThreshold(rows) {
+  const gaps = [];
+  for (const R of rows) {
+    const ws = R.words.filter((w) => w.confidence >= 40);
+    const hs = ws.filter((w) => VocabParser.hasHangul(w.text)).map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+    if (!hs.length) continue;
+    const mh = Math.max(1, hs[hs.length >> 1]);
+    for (let i = 1; i < ws.length; i++) {
+      if (isHg(ws[i - 1].text.slice(-1)) && isHg(ws[i].text[0])) gaps.push((ws[i].bbox.x0 - ws[i - 1].bbox.x1) / mh);
+    }
+  }
+  const g = gaps.filter((x) => x > -0.2 && x < 2);
+  if (g.length < 12) return 0.62;
+  // Otsu: 두 무리로 나누는 최적 경계
+  const B = 60, hist = new Array(B).fill(0), lo = -0.2, w = 2.2 / B;
+  g.forEach((x) => hist[Math.min(B - 1, Math.floor((x - lo) / w))]++);
+  let best = 0, thr = 0.62, tot = g.length, sumAll = hist.reduce((a, c, i) => a + c * i, 0), wB = 0, sB = 0;
+  for (let i = 0; i < B; i++) {
+    wB += hist[i]; if (!wB || wB === tot) continue;
+    sB += hist[i] * i;
+    const mB = sB / wB, mF = (sumAll - sB) / (tot - wB), v = wB * (tot - wB) * (mB - mF) ** 2;
+    if (v > best) { best = v; thr = lo + (i + 1) * w; }
+  }
+  window.__gapInfo = { n: g.length, thr };
+  return Math.min(0.66, Math.max(0.28, thr));
+}
+async function recognizeCanvas(canvas, onStep, section) {
+  // L/C 표: 칸을 가로질러 한 줄씩 읽는 '한 덩어리' 모드, R/C 문단: '한 단' 모드
+  await OCR.mixed.setParameters({ tessedit_pageseg_mode: window.__psm || (section === 'LC' ? '6' : '4'), preserve_interword_spaces: '1' });
   const { data } = await OCR.mixed.recognize(canvas);
-  const lines = (data.lines || []).map((l) => {
+  OCR.rawText = (OCR.rawText || '') + '\n' + (data.text || '');
+  const merged = mergeRows(data.lines || []);
+  const thr = spacingThreshold(merged);
+  const lines = merged.map((l) => {
     const raw = (l.words || []).filter((w) => w.text && w.text.trim() && !JUNK.test(w.text.trim()));
     const conf = raw.length ? raw.reduce((a, w) => a + w.confidence, 0) / raw.length : 0;
     const shaky = raw.some((w) => /[A-Za-z]{2,}/.test(w.text) && w.confidence < 60);
@@ -1018,14 +1385,50 @@ async function recognizeCanvas(canvas, onStep) {
     if (g.length) groups.push(g);
     const main = groups.sort((a, b) => b.reduce((s2, w) => s2 + w.text.length, 0) - a.reduce((s2, w) => s2 + w.text.length, 0))[0] || [];
     const bbox = main.length ? { x0: Math.min(...main.map((w) => w.bbox.x0)), y0: Math.min(...main.map((w) => w.bbox.y0)), x1: Math.max(...main.map((w) => w.bbox.x1)), y1: Math.max(...main.map((w) => w.bbox.y1)) } : l.bbox;
-    return { words: cleanWords(l.words || []), conf, shaky, bbox };
-  });
+    // 표의 왼쪽 칸/오른쪽 칸 경계 = 단어 사이 가장 큰 빈칸
+    const hs2 = raw.map((w) => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+    const mh = hs2.length ? hs2[hs2.length >> 1] : 0;
+    let splitX = null, best = 0;
+    for (let i = 1; i < raw.length; i++) { const gap = raw[i].bbox.x0 - raw[i - 1].bbox.x1; if (gap > best) { best = gap; splitX = raw[i].bbox.x0; } }
+    if (!(best > mh * 2.5)) splitX = null;
+    const maxConf = raw.reduce((a, w) => Math.max(a, w.confidence), 0);
+    const full = raw.length ? { x0: Math.min(...raw.map((w) => w.bbox.x0)), y0: Math.min(...raw.map((w) => w.bbox.y0)), x1: Math.max(...raw.map((w) => w.bbox.x1)), y1: Math.max(...raw.map((w) => w.bbox.y1)) } : l.bbox;
+    return { words: cleanWords(l.words || []), conf, shaky, bbox, splitX, full, junk: maxConf < 70 && conf < 55 };
+  }).filter((L) => !L.junk);   // 그림 선이 글자로 읽힌 조각 줄은 버림
+  // 오른쪽 칸 시작 위치(페이지 공통): 줄마다 찾은 경계 중 왼쪽에 가까운 값
+  const splits = lines.map((L) => L.splitX).filter((x) => x != null).sort((a, b) => a - b);
+  const colX = splits.length >= 3 ? splits[Math.floor(splits.length * 0.2)] : null;
   const out = [];
   let k = 0;
   for (const L of lines) {
     k++; onStep(k, lines.length);
     if (!L.words.length) continue;
-    let text = joinWords(L.words);
+    let text = joinWords(L.words, thr);
+    if (section === 'LC' && L.splitX != null) {
+      // 표 한 줄: 왼쪽 영어 칸과 오른쪽 한국어 칸을 따로 처리
+      try {
+        const leftW = L.words.filter((w) => w.bbox.x1 <= L.splitX), rightW = L.words.filter((w) => w.bbox.x0 >= L.splitX);
+        let left = joinWords(leftW, thr);
+        if (leftW.length && !VocabParser.hasHangul(left) && leftW.some((w) => /[A-Za-z]{2,}/.test(w.text) && w.confidence < 75)) {
+          const r = await refineEnglish(canvas, leftW);
+          if (r.text && !VocabParser.hasHangul(r.text) && VocabParser.latinCount(r.text) >= VocabParser.latinCount(left) * 0.8 && r.conf >= 60) left = r.text;
+        }
+        let right = joinWords(rightW, thr);
+        // 영어 뒤에 바로 이어 읽으면 첫 한글 단어를 놓치기 쉬워서, 오른쪽 칸만 잘라 다시 읽음
+        const pad = Math.max(6, (L.full.y1 - L.full.y0) * 0.35);
+        const leftEdge = leftW.length ? Math.max(...leftW.map((w) => w.bbox.x1)) + pad : 0;
+        const x0 = Math.max(leftEdge, Math.min(L.splitX, colX != null ? colX : L.splitX) - pad);   // 첫 글자를 놓친 줄도 칸 시작부터 읽음
+        const crop = cropCanvas(canvas, x0, L.full.y0, L.full.x1 - x0, L.full.y1 - L.full.y0, pad);
+        await OCR.mixed.setParameters({ tessedit_pageseg_mode: '7' });
+        const { data: d2 } = await OCR.mixed.recognize(crop);
+        const rw = cleanWords(d2.words || []);
+        const re = joinWords(rw, thr);
+        if (re && VocabParser.hangulCount(re) >= VocabParser.hangulCount(right)) right = re;
+        text = (left + '  ' + right).trim();
+      } catch (e) { console.warn(e); }
+      out.push(text);
+      continue;
+    }
     const H = VocabParser.hangulCount(text), Lt = VocabParser.latinCount(text);
     try {
       if (H === 0 && Lt >= 3 && (L.shaky || L.conf < 85)) {
@@ -1042,7 +1445,7 @@ async function recognizeCanvas(canvas, onStep) {
         if (weak && lead.length && lead.length < L.words.length && VocabParser.latinCount(leadText) >= 2) {
           const r = await refineEnglish(canvas, lead);
           if (r.text && VocabParser.hangulCount(r.text) === 0 && VocabParser.latinCount(r.text) >= 2 && r.conf >= 60) {
-            text = r.text + ' ' + joinWords(L.words.slice(lead.length));
+            text = r.text + ' ' + joinWords(L.words.slice(lead.length), thr);
           }
         }
       }
@@ -1057,22 +1460,36 @@ async function runOCR() {
   const setP = (p, s) => { R.progress = p; if (s) R.status = s; const bar = document.querySelector('.prog i'); const st = document.querySelector('.status'); if (bar) bar.style.width = Math.round(p * 100) + '%'; if (st && s) st.lastChild.textContent = s; };
   try {
     await new Promise((r) => setTimeout(r, 30));
-    const canvas = preprocess(C);
+    let canvas = preprocess(C, R.section);
     let curPart = 0;
-    const parts = R.twoCol ? [cropCanvas(canvas, 0, 0, canvas.width / 2, canvas.height, 0), cropCanvas(canvas, canvas.width / 2, 0, canvas.width / 2, canvas.height, 0)] : [canvas];
+    const splitParts = (cv) => R.twoCol ? [cropCanvas(cv, 0, 0, cv.width / 2, cv.height, 0), cropCanvas(cv, cv.width / 2, 0, cv.width / 2, cv.height, 0)] : [cv];
+    let parts = splitParts(canvas);
     ocrLog = (who, m) => {
       if (m.status && /loading|initializ/i.test(m.status) && !OCR.mixed) setP(0.05 + 0.15 * (m.progress || 0), '인식 엔진 준비 중… (처음 한 번)');
       else if (who === 'mixed' && m.status === 'recognizing text') setP(0.2 + 0.45 * ((curPart + (m.progress || 0)) / parts.length), '글자 읽는 중…');
     };
     setP(0.05, '인식 엔진 준비 중…');
     await ensureOCR();
-    let lines = [];
-    for (curPart = 0; curPart < parts.length; curPart++) {
-      const ls = await recognizeCanvas(parts[curPart], (k, n) => setP(0.65 + 0.33 * ((curPart + k / n) / parts.length), `영어 부분 정밀하게 다시 읽는 중… ${k}/${n}`));
-      lines = lines.concat(ls);
+    const readAll = async (mode) => {
+      let lines = [];
+      for (curPart = 0; curPart < parts.length; curPart++) {
+        const ls = await recognizeCanvas(parts[curPart], (k, n) => setP(0.65 + 0.33 * ((curPart + k / n) / parts.length), `영어 부분 정밀하게 다시 읽는 중… ${k}/${n}`), mode);
+        lines = lines.concat(ls);
+      }
+      return lines.join('\n');
+    };
+    const mode = R.section;
+    OCR.rawText = '';
+    let text = await readAll(mode);
+    const det = VocabParser.detectSection(OCR.rawText + '\n' + text);
+    if (det && det !== mode) {
+      setSection(det, true);
+      // 다른 형식으로 판별되면 그 형식에 맞는 방식으로 한 번 더 읽음
+      setP(0.2, `${SEC[det]} 형식으로 다시 읽는 중…`);
+      canvas = preprocess(C, det); parts = splitParts(canvas);
+      text = await readAll(det);
     }
-    const text = lines.join('\n');
-    const found = VocabParser.parse(text);
+    const found = VocabParser.parse(text, { section: R.section, fromOCR: true }).map((e) => fixEntry({ ...e, section: R.section }));
     R.raw = (R.raw ? R.raw.trim() + '\n' : '') + text;
     R.entries = R.entries.concat(found);
     R.busy = false; R.done = (R.done || 0) + 1;
@@ -1086,30 +1503,35 @@ async function runOCR() {
 }
 
 /* ================= 단어장 화면 ================= */
-function renderList() {
-  const L = S.list, items = S.items;
-  const studied = items.filter((i) => i.attempts > 0);
-  const ta = studied.reduce((a, i) => a + i.attempts, 0), tc = studied.reduce((a, i) => a + i.correct, 0);
-  const words = items.filter((i) => i.kind === 'word').length;
-  const q = L.q.trim().toLowerCase();
-  let rows = items.filter((i) => {
+function listRows() {
+  const L = S.list, q = L.q.trim().toLowerCase();
+  return S.items.filter((i) => {
+    if (L.filter === 'LC' && secOf(i) !== 'LC') return false;
+    if (L.filter === 'RC' && secOf(i) !== 'RC') return false;
     if (L.filter === 'word' && i.kind !== 'word') return false;
     if (L.filter === 'example' && i.kind !== 'example') return false;
     if (L.filter === 'weak') { const a = accOf(i); if (a == null || a >= 0.6) return false; }
     return !q || i.term.toLowerCase().includes(q) || i.meaning.toLowerCase().includes(q);
-  });
-  rows = rows.slice().sort((a, b) => L.filter === 'weak' ? accOf(a) - accOf(b) : b.createdAt - a.createdAt);
+  }).sort((a, b) => L.filter === 'weak' ? accOf(a) - accOf(b) : b.createdAt - a.createdAt);
+}
+function renderList() {
+  const L = S.list, items = S.items;
+  const studied = items.filter((i) => i.attempts > 0);
+  const ta = studied.reduce((a, i) => a + i.attempts, 0), tc = studied.reduce((a, i) => a + i.correct, 0);
+  const lc = items.filter((i) => secOf(i) === 'LC').length;
+  const q = L.q.trim().toLowerCase();
+  const rows = listRows();
 
   const wrap = h('div', { class: 'scroll' });
   wrap.append(h('div', { class: 'topbar' }, h('h1', { class: 'h1' }, '단어장'), h('button', { class: 'iconbtn', html: I.more, 'aria-label': '메뉴', onclick: openMenu })));
   wrap.append(h('div', { class: 'stats' },
     h('div', { class: 'stat' }, h('b', null, items.length), h('span', null, '전체')),
-    h('div', { class: 'stat' }, h('b', null, `${words}·${items.length - words}`), h('span', null, '단어·예문')),
+    h('div', { class: 'stat' }, h('b', null, `${lc}·${items.length - lc}`), h('span', null, 'L/C·R/C')),
     h('div', { class: 'stat' }, h('b', null, studied.length), h('span', null, '학습함')),
     h('div', { class: 'stat' }, h('b', null, ta ? pct(tc / ta) : '—'), h('span', null, '정답률'))));
   const search = h('input', { class: 'search', type: 'search', id: 'listSearch', placeholder: '단어 또는 뜻 검색', value: L.q, oninput: (e) => { L.q = e.target.value; L.limit = 80; refreshList(); } });
   wrap.append(h('div', { class: 'section' }, search,
-    h('div', { class: 'chips' }, [['all', '전체'], ['word', '단어'], ['example', '예문'], ['weak', '취약 60%↓']].map(([k, lab]) =>
+    h('div', { class: 'chips' }, [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C'], ['word', '단어'], ['example', '예문'], ['weak', '취약 60%↓']].map(([k, lab]) =>
       h('button', { class: 'chip', 'aria-pressed': String(L.filter === k), onclick: () => { L.filter = k; L.limit = 80; render(); } }, lab)))));
   const listEl = h('div', { class: 'list', id: 'listBox' });
   fillList(listEl, rows);
@@ -1124,19 +1546,14 @@ function fillList(listEl, rows) {
     const a = accOf(i);
     listEl.append(h('button', { class: 'li', onclick: () => openEdit(i) },
       h('span', { class: 'bar ' + i.kind }),
-      h('span', { style: 'min-width:0' }, h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
+      h('span', { style: 'min-width:0' }, h('div', { class: 'tag sec-' + secOf(i) }, SEC[secOf(i)]), h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
       h('span', { class: 'r', style: a != null ? `color:${a >= .8 ? 'var(--ok)' : a >= .5 ? 'var(--ex)' : 'var(--no)'}` : '' }, a != null ? pct(a) : '', h('small', null, i.attempts ? `${i.attempts}회` : '미학습'))));
   });
   if (rows.length > S.list.limit) listEl.append(h('button', { class: 'more', onclick: () => { S.list.limit += 200; refreshList(); } }, `더 보기 (${rows.length - S.list.limit}개 남음)`));
 }
 function refreshList() {
   const L = S.list, q = L.q.trim().toLowerCase();
-  let rows = S.items.filter((i) => {
-    if (L.filter === 'word' && i.kind !== 'word') return false;
-    if (L.filter === 'example' && i.kind !== 'example') return false;
-    if (L.filter === 'weak') { const a = accOf(i); if (a == null || a >= 0.6) return false; }
-    return !q || i.term.toLowerCase().includes(q) || i.meaning.toLowerCase().includes(q);
-  }).sort((a, b) => L.filter === 'weak' ? accOf(a) - accOf(b) : b.createdAt - a.createdAt);
+  const rows = listRows();
   const box = document.getElementById('listBox'); if (box) fillList(box, rows);
 }
 
@@ -1148,10 +1565,12 @@ function openSheet(content) {
 }
 function openEdit(item) {
   openSheet((close) => {
-    const d = { term: item.term, meaning: item.meaning, kind: item.kind };
+    const d = { term: item.term, meaning: item.meaning, kind: item.kind, section: secOf(item) };
     let confirmDel = false;
     const segBtns = [];
     const seg = h('div', { class: 'seg' }, ['word', 'example'].map((k) => { const b = h('button', { 'aria-pressed': String(d.kind === k), onclick: () => { d.kind = k; segBtns.forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.k === k))); } }, k === 'word' ? '단어' : '예문'); b.dataset.k = k; segBtns.push(b); return b; }));
+    const secBtns = [];
+    const secSeg = h('div', { class: 'seg' }, ['LC', 'RC'].map((k) => { const b = h('button', { 'aria-pressed': String(d.section === k), onclick: () => { d.section = k; secBtns.forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.k === k))); } }, SEC[k]); b.dataset.k = k; secBtns.push(b); return b; }));
     const t = h('textarea', { class: 'input en', id: 'editTerm', rows: 2, autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', oninput: (e) => (d.term = e.target.value) }); t.value = d.term;
     const m = h('textarea', { class: 'input', id: 'editMeaning', rows: 3, oninput: (e) => (d.meaning = e.target.value) }); m.value = d.meaning;
     const delBtn = h('button', { class: 'btn ghost', style: 'color:var(--no)', onclick: async () => {
@@ -1161,7 +1580,8 @@ function openEdit(item) {
     } }, '삭제');
     return h('div', null,
       h('h2', null, '항목 편집', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })),
-      seg,
+      h('div', { class: 'form-l', style: 'margin-top:0' }, '단어장'), secSeg,
+      h('div', { class: 'form-l' }, '구분'), seg,
       h('div', { class: 'form-l' }, '영어'), t,
       h('div', { class: 'form-l' }, '뜻'), m,
       h('div', { class: 'form-l' }, '학습 기록'),
@@ -1172,7 +1592,7 @@ function openEdit(item) {
       h('div', { class: 'row-btns', style: 'margin-top:16px' },
         h('button', { class: 'btn primary', style: 'flex:1', onclick: async () => {
           if (!d.term.trim() || !d.meaning.trim()) { toast('영어와 뜻을 모두 입력해 주세요'); return; }
-          Object.assign(item, { term: d.term.trim(), meaning: d.meaning.trim(), kind: d.kind });
+          Object.assign(item, { term: d.term.trim(), meaning: d.meaning.trim(), kind: d.kind, section: d.section });
           await Store.put(item); close(); render(); toast('저장했어요');
         } }, '저장'),
         h('button', { class: 'btn ghost', onclick: async () => { Object.assign(item, { weight: 1, attempts: 0, correct: 0, lastSeen: 0 }); await Store.put(item); close(); render(); toast('이 항목의 기록을 초기화했어요'); } }, '기록 초기화'),
@@ -1235,14 +1655,15 @@ async function importBackup(file) {
     const obj = JSON.parse(await file.text());
     const list = Array.isArray(obj) ? obj : obj.items;
     if (!Array.isArray(list)) throw new Error('형식');
-    const byKey = new Map(S.items.map((i) => [keyOf(i.term, i.kind), i]));
+    const byKey = new Map(S.items.map((i) => [keyOf(i.term, i.kind, i.section), i]));
     const changed = []; let added = 0, merged = 0;
     for (const r of list) {
       if (!r || !r.term || !r.meaning) continue;
       const kind = r.kind === 'example' ? 'example' : 'word';
-      const k = keyOf(r.term, kind), ex = byKey.get(k);
+      const section = r.section === 'LC' ? 'LC' : 'RC';
+      const k = keyOf(r.term, kind, section), ex = byKey.get(k);
       if (ex) { if ((r.attempts || 0) > ex.attempts) { Object.assign(ex, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 }); changed.push(ex); merged++; } }
-      else { const it = { ...newItem({ term: String(r.term), meaning: String(r.meaning), kind, ref: r.ref || '' }), weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, createdAt: r.createdAt || Date.now(), lastSeen: r.lastSeen || 0 }; S.items.push(it); byKey.set(k, it); changed.push(it); added++; }
+      else { const it = { ...newItem({ term: String(r.term), meaning: String(r.meaning), kind, section, ref: r.ref || '' }), weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, createdAt: r.createdAt || Date.now(), lastSeen: r.lastSeen || 0 }; S.items.push(it); byKey.set(k, it); changed.push(it); added++; }
     }
     await Store.putMany(changed); render();
     toast(`${added}개 추가${merged ? `, ${merged}개 기록 갱신` : ''}`);
@@ -1270,11 +1691,19 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === ' ') { e.preventDefault(); S.revealed = !S.revealed; render(); }
 });
 
-if ('serviceWorker' in navigator) { window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); }); }
+if ('serviceWorker' in navigator) {
+  // 새 버전이 설치되면 한 번 자동으로 새로고침 (GitHub에 파일을 바꿔 올리면 앱이 스스로 업데이트됨)
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').then((r) => r.update()).catch(() => {}); });
+}
 (async function boot() {
   render();
   await Store.init();
   try { S.items = await Store.all(); } catch (e) { S.items = []; }
+  const legacy = S.items.filter((i) => i.section !== 'LC' && i.section !== 'RC');
+  if (legacy.length) { legacy.forEach((i) => (i.section = 'RC')); Store.putMany(legacy).catch(() => {}); }  // 이전 버전 항목은 R/C로
   if (Store.mode === 'memory') showWarn('이 화면에서는 기기에 저장할 수 없어요. Safari에서 열어 주세요.');
   else if (Store.mode === 'local') showWarn('간이 저장소를 쓰고 있어요. 단어장 메뉴에서 백업을 가끔 내보내 주세요.');
   render(true);
