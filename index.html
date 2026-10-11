@@ -88,6 +88,31 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .claude-card .cc-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--hl);color:#1A1606;flex:none}
 .claude-card .cc-ic svg{width:22px;height:22px}
 .btn span svg{width:18px;height:18px;display:block}
+.auth{display:flex;flex-direction:column;gap:14px;padding-top:28px}
+.brand{text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px;margin-bottom:6px}
+.brand-word{font-family:var(--f-en);font-weight:600;font-size:52px;line-height:1.1}
+.brand-word .hl{background:linear-gradient(transparent 60%,var(--hl) 60%,var(--hl) 90%,transparent 90%)}
+.brand h1{margin:0;font-size:20px}
+.brand p{margin:0;color:var(--muted);font-size:13px;max-width:30ch}
+.aform{display:flex;flex-direction:column;gap:12px}
+.af{display:flex;flex-direction:column;gap:5px}
+.af span{font-size:12px;font-weight:700;color:var(--muted);margin-left:2px}
+.ai{height:48px;border:1px solid var(--line);border-radius:12px;background:var(--sunk);padding:0 14px;font-size:16px;width:100%}
+.ai:focus{outline:2px solid var(--word);outline-offset:0;background:var(--card)}
+.aerr{margin:0;color:var(--no);font-size:13.5px;font-weight:600}
+.alinks{display:flex;flex-direction:column;align-items:center;gap:10px}
+.alinks .btn{width:100%}
+.alink{color:var(--muted);font-size:13px;font-weight:600;text-decoration:underline;text-underline-offset:3px;padding:6px}
+.reqbox{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--sunk);border-radius:14px;padding:14px;text-align:center}
+.reqbox>span{font-size:12px;color:var(--muted);font-weight:600}
+.reqbox>b{font-family:var(--f-num);font-size:34px;letter-spacing:.14em;font-variant-numeric:tabular-nums}
+.reqbox .timer{font-size:13px;color:var(--ink)}
+.reqbox .timer b{font-family:var(--f-num);color:var(--no)}
+.reqbox.expired>b{opacity:.35;text-decoration:line-through}
+.phone{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}
+.phone b{font-family:var(--f-num)}
+a.btn{text-decoration:none;color:var(--ink)}
+.h1 .who{font-size:14px;font-weight:600;color:var(--muted);margin-left:8px}
 .badge-row{display:flex;justify-content:flex-end;margin-top:-6px}
 
 .qcard,.acard{flex:1 1 0;min-height:0;border-radius:var(--r);position:relative;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;overflow:hidden}
@@ -651,8 +676,13 @@ const Store = {
   async init() {
     try {
       this.db = await new Promise((res, rej) => {
-        const r = indexedDB.open('toeic-voca', 1);
-        r.onupgradeneeded = () => r.result.createObjectStore('items', { keyPath: 'id' });
+        const r = indexedDB.open('toeic-voca', 2);
+        r.onupgradeneeded = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('items')) db.createObjectStore('items', { keyPath: 'id' });
+          if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'id' });   // 계정 (이 기기 안에만 저장)
+          if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');                         // 자동 로그인 정보 등
+        };
         r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
         setTimeout(() => rej(new Error('timeout')), 4000);
       });
@@ -684,7 +714,33 @@ const Store = {
     });
     if (this.mode === 'local') this.saveLocal();
   },
-  saveLocal() { try { localStorage.setItem('toeic-voca-items', JSON.stringify(S.items)); } catch (e) { showWarn('저장 공간이 부족해요. 백업을 내보내 두세요.'); } },
+  saveLocal() {
+    try {
+      const others = JSON.parse(localStorage.getItem('toeic-voca-items') || '[]').filter((i) => !S.user || i.uid !== S.user.id);
+      localStorage.setItem('toeic-voca-items', JSON.stringify(others.concat(S.items)));
+    } catch (e) { showWarn('저장 공간이 부족해요. 백업을 내보내 두세요.'); }
+  },
+  mem: { users: [], meta: {} },
+  async users() {
+    if (this.mode === 'idb') return new Promise((res, rej) => { const r = this.db.transaction('users', 'readonly').objectStore('users').getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
+    if (this.mode === 'local') { try { return JSON.parse(localStorage.getItem('toeic-voca-users') || '[]'); } catch (e) { return []; } }
+    return this.mem.users.slice();
+  },
+  async putUser(u) {
+    if (this.mode === 'idb') return new Promise((res, rej) => { const t = this.db.transaction('users', 'readwrite'); t.objectStore('users').put(u); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+    const list = (await this.users()).filter((x) => x.id !== u.id).concat(u);
+    if (this.mode === 'local') localStorage.setItem('toeic-voca-users', JSON.stringify(list)); else this.mem.users = list;
+  },
+  async getMeta(k) {
+    if (this.mode === 'idb') return new Promise((res) => { const r = this.db.transaction('meta', 'readonly').objectStore('meta').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); });
+    if (this.mode === 'local') { try { return JSON.parse(localStorage.getItem('toeic-voca-meta-' + k)); } catch (e) { return undefined; } }
+    return this.mem.meta[k];
+  },
+  async setMeta(k, v) {
+    if (this.mode === 'idb') return new Promise((res) => { const t = this.db.transaction('meta', 'readwrite'); t.objectStore('meta').put(v, k); t.oncomplete = () => res(); t.onerror = () => res(); });
+    if (this.mode === 'local') { try { localStorage.setItem('toeic-voca-meta-' + k, JSON.stringify(v)); } catch (e) {} return; }
+    this.mem.meta[k] = v;
+  },
 };
 
 /* ================= 상태 ================= */
@@ -693,6 +749,7 @@ const SEC = { LC: 'L/C', RC: 'R/C' };
 const secOf = (it) => (it.section === 'LC' ? 'LC' : 'RC');
 const kindLabel = (it) => `${SEC[secOf(it)]} ${it.kind === 'word' ? '단어' : '예문'}`;
 const S = {
+  user: null, users: [], auth: { mode: 'login', err: '', req: null, admin: { unlocked: false, code: '', result: '' } },
   tab: 'study', items: [], current: null, revealed: false, last: null,
   reg: { queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false, section: loadSection(), split: false, enText: '', koText: '' },
   list: { q: '', filter: 'all', limit: 80 },
@@ -702,7 +759,7 @@ const keyOf = (term, kind, section) => (section === 'LC' ? 'LC' : 'RC') + '|' + 
 const accOf = (it) => (it.attempts >= 2 ? it.correct / it.attempts : null);
 const pct = (v) => Math.round(v * 100) + '%';
 function newItem(e) {
-  return { id: uid(), term: e.term.trim(), meaning: e.meaning.trim(), kind: e.kind, section: e.section === 'LC' ? 'LC' : 'RC', ref: e.ref || '', weight: 1, attempts: 0, correct: 0, createdAt: Date.now(), lastSeen: 0 };
+  return { id: uid(), uid: S.user ? S.user.id : '', term: e.term.trim(), meaning: e.meaning.trim(), kind: e.kind, section: e.section === 'LC' ? 'LC' : 'RC', ref: e.ref || '', weight: 1, attempts: 0, correct: 0, createdAt: Date.now(), lastSeen: 0 };
 }
 
 /* ================= DOM 도우미 ================= */
@@ -730,6 +787,197 @@ function toast(msg, action) {
   toastTimer = setTimeout(() => t.remove(), action ? 3500 : 2200);
 }
 function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+
+/* ================= 계정 (로그인 · 가입 · 관리자 승인) ================= */
+// 계정은 각자의 기기 안에만 저장돼요 (서버 없음). 비밀번호는 PBKDF2로 암호화해서 보관.
+const ADMIN_PHONE = [43, 56, 50, 49, 48, 51, 57, 48, 50, 51, 57, 48, 51].map((c) => String.fromCharCode(c)).join('');
+const ADMIN_PHONE_VIEW = '010-' + ADMIN_PHONE.slice(5, 9) + '-' + ADMIN_PHONE.slice(9);
+const ADMIN_KEY_HASH = 'afb8c3a87780471b97abf448e149f925904041416118d30017dba31568e9d1a1';
+const APPROVAL_SECRET = 'krMWphIs55Tlz7NYF1Z4dwXqZbTqtK2U';
+const REQ_MINUTES = 5;
+const enc = new TextEncoder();
+const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function hashPw(pw, salt) {
+  const k = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+  return toB64(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: fromB64(salt), iterations: 150000, hash: 'SHA-256' }, k, 256));
+}
+async function sha256hex(t) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join(''); }
+async function approvalFor(code) {
+  const k = await crypto.subtle.importKey('raw', enc.encode(APPROVAL_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const g = new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode('toeic-voca|' + code.trim().toUpperCase())));
+  return String((((g[0] << 24) | (g[1] << 16) | (g[2] << 8) | g[3]) >>> 0) % 1000000).padStart(6, '0');
+}
+function newRequestCode() {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', r = crypto.getRandomValues(new Uint8Array(6));
+  return [...r].map((x) => A[x % A.length]).join('');
+}
+const isPWA = () => !(window.claude && window.claude.use);   // Claude 안에서 열린 버전은 문자 링크가 안 열릴 수 있음
+
+async function enterApp(u) {
+  S.user = u;
+  await Store.setMeta('session', u.id);       // 이 기기에서 자동 로그인
+  let all = [];
+  try { all = await Store.all(); } catch (e) {}
+  const orphan = all.filter((i) => !i.uid);     // 로그인 기능 이전에 저장한 단어는 이 기기의 첫 로그인 계정으로
+  if (orphan.length) { orphan.forEach((i) => (i.uid = u.id)); await Store.putMany(orphan).catch(() => {}); }
+  S.items = all.filter((i) => i.uid === u.id);
+  const legacy = S.items.filter((i) => i.section !== 'LC' && i.section !== 'RC');
+  if (legacy.length) { legacy.forEach((i) => (i.section = 'RC')); Store.putMany(legacy).catch(() => {}); }
+  S.current = null; S.tab = 'study';
+  stopReqTimer();
+  render(true);
+}
+async function logout() {
+  await Store.setMeta('session', null);
+  S.user = null; S.items = []; S.current = null; S.last = null;
+  S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
+  $layer.innerHTML = '';
+  render();
+}
+let reqTimer = null;
+function stopReqTimer() { if (reqTimer) { clearInterval(reqTimer); reqTimer = null; } }
+function startReqTimer() {
+  stopReqTimer();
+  reqTimer = setInterval(() => {
+    const R = S.auth.req; if (!R) return stopReqTimer();
+    const left = Math.max(0, R.expires - Date.now());
+    const el = document.getElementById('reqLeft');
+    if (el) el.textContent = `${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
+    if (!left) { stopReqTimer(); render(); }
+  }, 500);
+}
+function authField(id, label, attrs) {
+  return h('label', { class: 'af', for: id }, h('span', null, label), h('input', { id, class: 'ai', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', ...attrs }));
+}
+const val = (id) => (document.getElementById(id) || {}).value || '';
+
+function renderAuth() {
+  const A = S.auth;
+  const wrap = h('div', { class: 'scroll auth' });
+  wrap.append(h('div', { class: 'brand' }, h('div', { class: 'brand-word' }, h('span', { class: 'hl' }, 'voca')), h('h1', null, '토익 단어 암기'),
+    h('p', null, A.mode === 'signup' ? '계정 만들기' : A.mode === 'admin' ? '관리자 · 가입 승인 번호 만들기' : '로그인하면 이 기기에서는 다음부터 자동으로 들어와요')));
+  const err = h('p', { class: 'aerr', role: 'alert', id: 'aerr', hidden: !A.err }, A.err || '');
+  // 오류는 화면을 다시 그리지 않고 그 자리에 표시 (입력한 내용 유지)
+  const setErr = (m) => { A.err = m; const el = document.getElementById('aerr'); if (el) { el.textContent = m; el.hidden = !m; } else render(); };
+
+  if (A.mode === 'login') {
+    const form = h('form', { class: 'panel aform', onsubmit: async (e) => {
+      e.preventDefault();
+      const id = val('loginId').trim().toLowerCase(), pw = val('loginPw');
+      if (!id || !pw) return setErr('아이디와 비밀번호를 입력해 주세요.');
+      const u = S.users.find((x) => x.id === id);
+      if (!u) return setErr(S.users.length ? '이 기기에 없는 아이디예요. 계정은 기기마다 따로 만들어요.' : '아직 이 기기에 만든 계정이 없어요. 아래에서 계정을 만들어 주세요.');
+      if ((await hashPw(pw, u.salt)) !== u.hash) return setErr('비밀번호가 맞지 않아요.');
+      A.err = ''; await enterApp(u);
+    } },
+      authField('loginId', '아이디', { autocomplete: 'username', placeholder: '아이디' }),
+      authField('loginPw', '비밀번호', { type: 'password', autocomplete: 'current-password', placeholder: '비밀번호' }),
+      err,
+      h('button', { class: 'btn primary', type: 'submit' }, '로그인'));
+    wrap.append(form,
+      h('div', { class: 'alinks' },
+        h('button', { class: 'btn ghost', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null }; render(); } }, '계정 만들기'),
+        h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'admin', err: '' }; render(); } }, '관리자: 가입 승인 번호 만들기')));
+    return wrap;
+  }
+
+  if (A.mode === 'signup') {
+    const back = h('button', { class: 'alink', onclick: () => { stopReqTimer(); S.auth = { ...A, mode: 'login', err: '', req: null }; render(); } }, '← 로그인으로 돌아가기');
+    if (!A.req) {
+      const d = A.draft || {};
+      const form = h('form', { class: 'panel aform', onsubmit: async (e) => {
+        e.preventDefault();
+        const name = val('suName').trim(), id = val('suId').trim().toLowerCase(), pw = val('suPw'), pw2 = val('suPw2');
+        A.draft = { name, id };
+        if (!name) return setErr('이름을 입력해 주세요.');
+        if (!/^[a-z0-9_.-]{4,20}$/.test(id)) return setErr('아이디는 영어 소문자·숫자로 4~20자로 만들어 주세요.');
+        if (S.users.some((x) => x.id === id)) return setErr('이 기기에 이미 있는 아이디예요.');
+        if (pw.length < 6) return setErr('비밀번호는 6자 이상으로 만들어 주세요.');
+        if (pw !== pw2) return setErr('비밀번호 재입력이 일치하지 않아요.');
+        const salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
+        A.req = { name, id, salt, hash: await hashPw(pw, salt), code: newRequestCode(), expires: Date.now() + REQ_MINUTES * 60000, tries: 0 };
+        A.err = ''; render(); startReqTimer();
+      } },
+        authField('suName', '이름', { placeholder: '홍길동', value: d.name || '', autocomplete: 'name' }),
+        authField('suId', '아이디', { placeholder: '영어 소문자·숫자 4~20자', value: d.id || '' }),
+        authField('suPw', '비밀번호', { type: 'password', placeholder: '6자 이상', autocomplete: 'new-password' }),
+        authField('suPw2', '비밀번호 재입력', { type: 'password', placeholder: '한 번 더 입력', autocomplete: 'new-password' }),
+        err,
+        h('button', { class: 'btn primary', type: 'submit' }, '가입 승인 요청'),
+        h('p', { class: 'note', style: 'margin:2px 0 0' }, `다음 단계에서 관리자(${ADMIN_PHONE_VIEW})에게 요청 코드를 보내고, ${REQ_MINUTES}분 안에 승인 번호를 입력하면 가입돼요.`));
+      wrap.append(form, h('div', { class: 'alinks' }, back));
+      return wrap;
+    }
+    const R = A.req;
+    const left = Math.max(0, R.expires - Date.now());
+    const expired = left === 0;
+    const msg = `[토익 단어 암기] 가입 승인 요청\n이름: ${R.name}\n아이디: ${R.id}\n요청 코드: ${R.code}`;
+    const smsHref = `sms:${ADMIN_PHONE}&body=${encodeURIComponent(msg)}`;
+    const panel = h('div', { class: 'panel aform' },
+      h('div', { class: 'reqbox' + (expired ? ' expired' : '') },
+        h('span', null, '요청 코드'), h('b', null, R.code),
+        h('span', { class: 'timer' }, expired ? '시간 초과' : h('span', null, '남은 시간 ', h('b', { id: 'reqLeft' }, `${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`)))),
+      h('ol', { class: 'steps', style: 'margin:4px 0 0' },
+        h('li', null, '관리자에게 ', h('b', null, '요청 코드'), '를 문자로 보내요.'),
+        h('li', null, '관리자가 알려준 ', h('b', null, '승인 번호 6자리'), '를 아래에 입력해요.')),
+      isPWA()
+        ? [h('a', { class: 'btn ghost', href: smsHref }, '관리자에게 문자 보내기'), h('p', { class: 'note', style: 'margin:-4px 0 0;text-align:center' }, '받는 번호 ' + ADMIN_PHONE_VIEW + ' · 요청 코드가 자동으로 들어가요')]
+        : h('div', { class: 'phone' }, '관리자 번호 ', h('b', null, ADMIN_PHONE_VIEW), h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(msg); toast('요청 내용을 복사했어요. 문자로 보내 주세요.'); } catch (e) { toast('번호와 요청 코드를 직접 보내 주세요.'); } } }, '요청 내용 복사')),
+      expired
+        ? h('button', { class: 'btn primary', onclick: () => { R.code = newRequestCode(); R.expires = Date.now() + REQ_MINUTES * 60000; R.tries = 0; A.err = ''; render(); startReqTimer(); } }, '새 요청 코드 받기')
+        : h('form', { class: 'aform', style: 'padding:0', onsubmit: async (e) => {
+            e.preventDefault();
+            if (Date.now() > R.expires) return render();
+            const n = val('suOtp').replace(/\D/g, '');
+            if (n.length !== 6) return setErr('승인 번호 6자리를 입력해 주세요.');
+            R.tries++;
+            if (n !== (await approvalFor(R.code))) {
+              if (R.tries >= 5) { R.expires = 0; A.err = '5번 틀려서 이 요청 코드는 막혔어요. 새 요청 코드를 받아 주세요.'; return render(); }
+              return setErr(`승인 번호가 맞지 않아요. (${R.tries}/5)`);
+            }
+            const u = { id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: Date.now() };
+            await Store.putUser(u); S.users = await Store.users();
+            S.auth = { mode: 'login', err: '', req: null, admin: A.admin };
+            toast(`${u.name}님, 가입을 환영해요!`);
+            await enterApp(u);
+          } },
+            authField('suOtp', '승인 번호', { inputmode: 'numeric', maxlength: '6', placeholder: '6자리 숫자', autocomplete: 'one-time-code', pattern: '[0-9]*' }),
+            err,
+            h('button', { class: 'btn primary', type: 'submit' }, '가입 완료')));
+    wrap.append(panel, h('div', { class: 'alinks' }, back));
+    return wrap;
+  }
+
+  // 관리자: 요청 코드 → 승인 번호
+  const AD = A.admin;
+  const back = h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'login', err: '' }; S.authOverlay = false; render(); } }, S.user ? '← 단어장으로 돌아가기' : '← 로그인으로 돌아가기');
+  if (!AD.unlocked) {
+    wrap.append(h('form', { class: 'panel aform', onsubmit: async (e) => {
+      e.preventDefault();
+      if ((await sha256hex(val('adKey').trim().toUpperCase())) !== ADMIN_KEY_HASH) return setErr('관리자 키가 맞지 않아요.');
+      AD.unlocked = true; await Store.setMeta('admin', true); A.err = ''; render();
+    } },
+      authField('adKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }),
+      err,
+      h('button', { class: 'btn primary', type: 'submit' }, '확인'),
+      h('p', { class: 'note', style: 'margin:2px 0 0' }, '한 번 확인하면 이 기기에서는 다시 묻지 않아요.')), h('div', { class: 'alinks' }, back));
+    return wrap;
+  }
+  wrap.append(h('form', { class: 'panel aform', onsubmit: async (e) => {
+    e.preventDefault();
+    const code = val('adCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length !== 6) return setErr('요청 코드 6자리를 입력해 주세요.');
+    AD.code = code; AD.result = await approvalFor(code); A.err = ''; render();
+  } },
+    authField('adCode', '받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: AD.code || '', style: 'text-transform:uppercase' }),
+    err,
+    h('button', { class: 'btn primary', type: 'submit' }, '승인 번호 만들기'),
+    AD.result ? h('div', { class: 'reqbox' }, h('span', null, `${AD.code}의 승인 번호`), h('b', null, AD.result),
+      h('button', { class: 'btn ghost sm', onclick: async (e) => { e.preventDefault(); try { await navigator.clipboard.writeText(AD.result); toast('승인 번호를 복사했어요'); } catch (er) { toast('번호를 직접 알려 주세요'); } } }, '복사')) : null,
+    h('p', { class: 'note', style: 'margin:2px 0 0' }, '신청자에게 승인 번호를 알려주세요. 신청자 화면의 5분 안에 입력해야 가입돼요.')), h('div', { class: 'alinks' }, back));
+  return wrap;
+}
 
 /* ================= 출제 로직 ================= */
 function pickNext() {
@@ -1688,7 +1936,7 @@ function renderList() {
   const rows = listRows();
 
   const wrap = h('div', { class: 'scroll' });
-  wrap.append(h('div', { class: 'topbar' }, h('h1', { class: 'h1' }, '단어장'), h('button', { class: 'iconbtn', html: I.more, 'aria-label': '메뉴', onclick: openMenu })));
+  wrap.append(h('div', { class: 'topbar' }, h('h1', { class: 'h1' }, '단어장', h('small', { class: 'who' }, S.user ? `${S.user.name}님` : '')), h('button', { class: 'iconbtn', html: I.more, 'aria-label': '메뉴', onclick: openMenu })));
   wrap.append(h('div', { class: 'stats' },
     h('div', { class: 'stat' }, h('b', null, items.length), h('span', null, '전체')),
     h('div', { class: 'stat' }, h('b', null, `${lc}·${items.length - lc}`), h('span', null, 'L/C·R/C')),
@@ -1781,9 +2029,11 @@ function openMenu() {
     return h('div', null,
       h('h2', null, '단어장 관리', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })),
       h('div', { class: 'menu' },
+        h('button', { onclick: () => { close(); S.auth = { ...S.auth, mode: 'admin', err: '' }; S.authOverlay = true; render(); } }, h('span', { html: I.spark }), h('span', null, '가입 승인 번호 만들기', h('small', null, '관리자 키가 필요해요'))),
         h('button', { onclick: () => { exportBackup(); } }, h('span', { html: I.down }), h('span', null, '백업 파일 내보내기', h('small', null, '단어와 학습 기록 전체를 파일 하나로 저장'))),
         h('button', { onclick: () => importInput.click() }, h('span', { html: I.up }), h('span', null, '백업 불러오기', h('small', null, '내보낸 파일을 선택하면 합쳐서 불러와요'))),
-        resetBtn, delBtn),
+        resetBtn, delBtn,
+        h('button', { onclick: () => { close(); logout(); } }, h('span', { html: I.up }), h('span', null, '로그아웃', h('small', null, `${S.user ? S.user.name + ' (' + S.user.id + ')' : ''} · 다시 들어올 때 비밀번호가 필요해요`)))),
       importInput,
       h('p', { class: 'note' }, `저장 위치: ${Store.mode === 'idb' ? '이 기기의 브라우저 저장소' : Store.mode === 'local' ? '이 기기의 브라우저 저장소(간이)' : '저장 안 됨 (화면을 닫으면 사라져요)'} · ${S.items.length}개`));
   });
@@ -1838,6 +2088,14 @@ async function importBackup(file) {
 /* ================= 라우팅 ================= */
 function go(tab) { S.tab = tab; $layer.innerHTML = ''; render(true); $screen.scrollTop = 0; }
 function render(animate) {
+  const tabs = document.querySelector('.tabs');
+  if (!S.user || S.authOverlay) {
+    tabs.hidden = true;
+    $screen.innerHTML = '';
+    $screen.append(renderAuth());
+    return;
+  }
+  tabs.hidden = false;
   document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === S.tab)));
   const keepScroll = $screen.querySelector('.scroll');
   const st = keepScroll && !animate ? keepScroll.scrollTop : 0;
@@ -1850,7 +2108,7 @@ function render(animate) {
 }
 document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => go(t.dataset.tab)));
 document.addEventListener('keydown', (e) => {
-  if (S.tab !== 'study' || !S.current || $layer.firstChild || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  if (!S.user || S.authOverlay || S.tab !== 'study' || !S.current || $layer.firstChild || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
   if (e.key === 'o' || e.key === 'ArrowLeft') answer(true);
   else if (e.key === 'x' || e.key === 'ArrowRight') answer(false);
   else if (e.key === ' ') { e.preventDefault(); S.revealed = !S.revealed; render(); }
@@ -1867,12 +2125,14 @@ if ('serviceWorker' in navigator) {
   render();
   initClaude();
   await Store.init();
-  try { S.items = await Store.all(); } catch (e) { S.items = []; }
-  const legacy = S.items.filter((i) => i.section !== 'LC' && i.section !== 'RC');
-  if (legacy.length) { legacy.forEach((i) => (i.section = 'RC')); Store.putMany(legacy).catch(() => {}); }  // 이전 버전 항목은 R/C로
+  try { S.users = await Store.users(); } catch (e) { S.users = []; }
+  S.auth.admin.unlocked = !!(await Store.getMeta('admin'));
+  const sid = await Store.getMeta('session');
+  const me = S.users.find((u) => u.id === sid);
+  if (me) { await enterApp(me); } else { render(); }      // 자동 로그인 / 첫 화면 로그인
   if (Store.mode === 'memory') showWarn('이 화면에서는 기기에 저장할 수 없어요. Safari에서 열어 주세요.');
   else if (Store.mode === 'local') showWarn('간이 저장소를 쓰고 있어요. 단어장 메뉴에서 백업을 가끔 내보내 주세요.');
-  render(true);
+  if (S.user) render(true);
 })();
 </script>
 
