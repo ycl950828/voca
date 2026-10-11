@@ -54,7 +54,7 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .scroll{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px 16px 24px}
 
 /* ---------- tab bar ---------- */
-.tabs{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:var(--card);padding:6px 8px 4px}
+.tabs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border-top:1px solid var(--line);background:var(--card);padding:6px 8px 4px}
 .tab{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 0;color:var(--muted);font-size:11px;font-weight:600}
 .tab svg{width:24px;height:24px}
 .tab[aria-selected="true"]{color:var(--ink)}
@@ -78,10 +78,10 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .badge.example{color:var(--ex);background:var(--ex-bg)}
 .badge.sec-LC{color:var(--word);background:var(--word-bg);font-size:13px;letter-spacing:.02em}
 .badge.sec-RC{color:var(--ex);background:var(--ex-bg);font-size:13px;letter-spacing:.02em}
-.secseg{grid-template-columns:1fr 1fr}
-.secseg button{height:auto;padding:8px 4px;display:flex;flex-direction:column;align-items:center;line-height:1.25}
-.secseg button b{font-size:15px}
-.secseg button small{font-size:11px;font-weight:500;color:var(--muted)}
+.seg.secseg{grid-template-columns:1fr 1fr;padding:4px;gap:4px;border-radius:14px}
+.seg.secseg button{height:auto;min-height:56px;padding:8px 6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.2;border-radius:11px;min-width:0}
+.seg.secseg button b{font-size:15px;white-space:nowrap}
+.seg.secseg button small{font-size:11.5px;font-weight:500;color:var(--muted);white-space:nowrap}
 .li .tag{font-size:11px;font-weight:700;margin-bottom:1px}
 .li .tag.sec-LC{color:var(--word)} .li .tag.sec-RC{color:var(--ex)}
 .claude-card .cc-head{display:flex;gap:12px;align-items:flex-start}
@@ -288,6 +288,9 @@ textarea.raw{width:100%;min-height:150px;resize:vertical;border:1px solid var(--
     <button class="tab" role="tab" data-tab="list" aria-selected="false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path class="ico-bg" fill="none" d="M5 4.5h10a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/><path d="M9 8h5"/></svg>
       단어장</button>
+    <button class="tab" role="tab" data-tab="admin" aria-selected="false" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path class="ico-bg" fill="none" d="M12 3.5l7 2.8v5.2c0 4.3-2.9 7.7-7 9-4.1-1.3-7-4.7-7-9V6.3z"/><path d="M9 12l2 2 4-4"/></svg>
+      관리자</button>
   </nav>
 </div>
 <div id="layer"></div>
@@ -883,8 +886,7 @@ function renderAuth() {
     wrap.append(form,
       h('div', { class: 'alinks' },
         h('button', { class: 'btn ghost', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null }; render(); } }, '계정 만들기'),
-        h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null, adminSignup: true }; render(); } }, '관리자: 관리자 키로 바로 가입'),
-        h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'admin', err: '' }; render(); } }, '관리자: 가입 승인 번호 만들기')));
+));
     return wrap;
   }
 
@@ -921,7 +923,7 @@ function renderAuth() {
         authField('suPw', '비밀번호', { type: 'password', placeholder: '6자 이상', autocomplete: 'new-password' }),
         authField('suPw2', '비밀번호 재입력', { type: 'password', placeholder: '한 번 더 입력', autocomplete: 'new-password' }),
         h('details', { class: 'adm', open: !!A.adminSignup },
-          h('summary', null, '관리자이신가요? 관리자 키로 바로 가입'),
+          h('summary', null, '관리자 키가 있다면'),
           authField('suAdminKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }),
           h('p', { class: 'note', style: 'margin:4px 0 0' }, '키가 맞으면 문자 승인 없이 바로 가입돼요. 관리자가 아니면 비워 두세요.')),
         err,
@@ -998,6 +1000,53 @@ function renderAuth() {
       h('button', { class: 'btn ghost sm', onclick: async (e) => { e.preventDefault(); try { await navigator.clipboard.writeText(AD.result); toast('승인 번호를 복사했어요'); } catch (er) { toast('번호를 직접 알려 주세요'); } } }, '복사')) : null,
     h('p', { class: 'note', style: 'margin:2px 0 0' }, '신청자에게 승인 번호를 알려주세요. 신청자 화면의 5분 안에 입력해야 가입돼요.')), h('div', { class: 'alinks' }, back));
   return wrap;
+}
+
+/* ---------- 관리자 화면 (관리자 계정에만 보임) ---------- */
+const ADM = { code: '', result: '', history: [] };
+function renderAdmin() {
+  const wrap = h('div', { class: 'scroll' });
+  wrap.append(h('h1', { class: 'h1' }, '관리자', h('small', { class: 'who' }, S.user.name + '님')));
+  const out = h('div', { class: 'reqbox', hidden: !ADM.result },
+    h('span', null, ADM.code ? `요청 코드 ${ADM.code}의 승인 번호` : ''), h('b', { id: 'admResult' }, ADM.result || ''),
+    h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(ADM.result); toast('승인 번호를 복사했어요'); } catch (e) { toast('번호를 직접 알려 주세요'); } } }, '복사'));
+  const form = h('form', { class: 'aform', onsubmit: async (e) => {
+    e.preventDefault();
+    const code = val('admCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length !== 6) { toast('요청 코드 6자리를 입력해 주세요'); return; }
+    ADM.code = code; ADM.result = await approvalFor(code);
+    ADM.history = [{ code, num: ADM.result, at: Date.now() }].concat(ADM.history.filter((x) => x.code !== code)).slice(0, 5);
+    render();
+  } },
+    authField('admCode', '신청자에게 받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: ADM.code, style: 'text-transform:uppercase;font-family:var(--f-num);letter-spacing:.1em' }),
+    h('button', { class: 'btn primary', type: 'submit' }, '승인 번호 만들기'));
+  wrap.append(h('div', { class: 'section' }, h('h3', null, '가입 승인'),
+    h('div', { class: 'panel aform' }, form, out,
+      h('p', { class: 'note', style: 'margin:0' }, '신청자 폰에 뜬 요청 코드를 넣고, 나온 6자리 번호를 문자로 알려주세요. 신청자가 5분 안에 입력해야 가입돼요.'))));
+  if (ADM.history.length) wrap.append(h('div', { class: 'section' }, h('h3', null, '최근 만든 승인 번호'),
+    h('div', { class: 'list' }, ADM.history.map((x) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
+      h('span', { style: 'font-family:var(--f-num);font-weight:600' }, x.code), h('span', { class: 'r' }, x.num, h('small', null, new Date(x.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }))))))));
+  const accList = h('div', { class: 'list' }, S.users.map((u) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
+    h('span', { style: 'min-width:0' }, h('div', { class: 't', style: 'font-family:var(--f-ui);font-size:15px' }, u.name), h('div', { class: 'm' }, u.id)),
+    h('span', { class: 'badge ' + (u.admin ? 'sec-LC' : 'example'), style: 'font-size:11px' }, u.admin ? '관리자' : '사용자'))));
+  wrap.append(h('div', { class: 'section' }, h('h3', null, '이 기기의 계정'), accList,
+    h('p', { class: 'note' }, '계정은 기기마다 따로 저장돼요. 다른 사람의 계정은 그 사람 폰에만 있어요.')));
+  return wrap;
+}
+function openAdminKey() {
+  openSheet((close) => {
+    const inp = h('input', { class: 'ai', id: 'promoteKey', type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX', autocomplete: 'off' });
+    const msg = h('p', { class: 'aerr', hidden: true });
+    return h('form', { onsubmit: async (e) => {
+      e.preventDefault();
+      if ((await sha256hex(inp.value.trim().toUpperCase())) !== ADMIN_KEY_HASH) { msg.textContent = '관리자 키가 맞지 않아요.'; msg.hidden = false; return; }
+      S.user.admin = true; await Store.putUser(S.user); S.users = await Store.users();
+      close(); S.tab = 'admin'; render(true); toast('관리자로 등록됐어요. 관리자 탭이 생겼어요.');
+    } },
+      h('h2', null, '관리자 키 등록', h('button', { class: 'iconbtn', type: 'button', html: I.x, 'aria-label': '닫기', onclick: close })),
+      h('div', { class: 'aform' }, inp, msg, h('button', { class: 'btn primary', type: 'submit' }, '등록'),
+        h('p', { class: 'note', style: 'margin:0' }, '등록하면 이 계정에 관리자 탭이 생기고, 키는 다시 묻지 않아요.')));
+  });
 }
 
 /* ================= 출제 로직 ================= */
@@ -2050,10 +2099,10 @@ function openMenu() {
     return h('div', null,
       h('h2', null, '단어장 관리', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })),
       h('div', { class: 'menu' },
-        h('button', { onclick: () => { close(); S.auth = { ...S.auth, mode: 'admin', err: '' }; S.authOverlay = true; render(); } }, h('span', { html: I.spark }), h('span', null, '가입 승인 번호 만들기', h('small', null, '관리자 키가 필요해요'))),
         h('button', { onclick: () => { exportBackup(); } }, h('span', { html: I.down }), h('span', null, '백업 파일 내보내기', h('small', null, '단어와 학습 기록 전체를 파일 하나로 저장'))),
         h('button', { onclick: () => importInput.click() }, h('span', { html: I.up }), h('span', null, '백업 불러오기', h('small', null, '내보낸 파일을 선택하면 합쳐서 불러와요'))),
         resetBtn, delBtn,
+        S.user && !S.user.admin ? h('button', { onclick: () => { close(); openAdminKey(); } }, h('span', { html: I.spark }), h('span', null, '관리자 키 등록', h('small', null, '관리자만 해당돼요'))) : null,
         h('button', { onclick: () => { close(); logout(); } }, h('span', { html: I.up }), h('span', null, '로그아웃', h('small', null, `${S.user ? S.user.name + ' (' + S.user.id + ')' : ''} · 다시 들어올 때 비밀번호가 필요해요`)))),
       importInput,
       h('p', { class: 'note' }, `저장 위치: ${Store.mode === 'idb' ? '이 기기의 브라우저 저장소' : Store.mode === 'local' ? '이 기기의 브라우저 저장소(간이)' : '저장 안 됨 (화면을 닫으면 사라져요)'} · ${S.items.length}개`));
@@ -2117,12 +2166,15 @@ function render(animate) {
     return;
   }
   tabs.hidden = false;
+  const isAdmin = !!S.user.admin;
+  document.querySelector('.tab[data-tab="admin"]').hidden = !isAdmin;
+  if (S.tab === 'admin' && !isAdmin) S.tab = 'study';
   document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === S.tab)));
   const keepScroll = $screen.querySelector('.scroll');
   const st = keepScroll && !animate ? keepScroll.scrollTop : 0;
   const active = document.activeElement && document.activeElement.id;
   $screen.innerHTML = '';
-  const v = S.tab === 'study' ? renderStudy(animate) : S.tab === 'add' ? renderAdd() : renderList();
+  const v = S.tab === 'study' ? renderStudy(animate) : S.tab === 'add' ? renderAdd() : S.tab === 'admin' ? renderAdmin() : renderList();
   [].concat(v).forEach((n) => n && $screen.append(n));
   const sc = $screen.querySelector('.scroll'); if (sc && st) sc.scrollTop = st;
   if (active) { const el = document.getElementById(active); if (el && el.tagName !== 'BUTTON') { el.focus({ preventScroll: true }); if (el.setSelectionRange && el.value) { try { const n = el.value.length; el.setSelectionRange(n, n); } catch (e) {} } } }
