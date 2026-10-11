@@ -88,6 +88,9 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .claude-card .cc-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--hl);color:#1A1606;flex:none}
 .claude-card .cc-ic svg{width:22px;height:22px}
 .btn span svg{width:18px;height:18px;display:block}
+.adm{background:var(--sunk);border-radius:12px;padding:10px 12px}
+.adm summary{font-size:13px;font-weight:700;color:var(--muted);cursor:pointer}
+.adm[open] summary{margin-bottom:8px}
 .auth{display:flex;flex-direction:column;gap:14px;padding-top:28px}
 .brand{text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px;margin-bottom:6px}
 .brand-word{font-family:var(--f-en);font-weight:600;font-size:52px;line-height:1.1}
@@ -817,6 +820,7 @@ const isPWA = () => !(window.claude && window.claude.use);   // Claude 안에서
 async function enterApp(u) {
   S.user = u;
   await Store.setMeta('session', u.id);       // 이 기기에서 자동 로그인
+  try { localStorage.setItem('toeic-voca-session', u.id); } catch (e) {}   // 예비 저장
   let all = [];
   try { all = await Store.all(); } catch (e) {}
   const orphan = all.filter((i) => !i.uid);     // 로그인 기능 이전에 저장한 단어는 이 기기의 첫 로그인 계정으로
@@ -830,6 +834,7 @@ async function enterApp(u) {
 }
 async function logout() {
   await Store.setMeta('session', null);
+  try { localStorage.removeItem('toeic-voca-session'); } catch (e) {}
   S.user = null; S.items = []; S.current = null; S.last = null;
   S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
   $layer.innerHTML = '';
@@ -878,6 +883,7 @@ function renderAuth() {
     wrap.append(form,
       h('div', { class: 'alinks' },
         h('button', { class: 'btn ghost', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null }; render(); } }, '계정 만들기'),
+        h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null, adminSignup: true }; render(); } }, '관리자: 관리자 키로 바로 가입'),
         h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'admin', err: '' }; render(); } }, '관리자: 가입 승인 번호 만들기')));
     return wrap;
   }
@@ -896,6 +902,17 @@ function renderAuth() {
         if (pw.length < 6) return setErr('비밀번호는 6자 이상으로 만들어 주세요.');
         if (pw !== pw2) return setErr('비밀번호 재입력이 일치하지 않아요.');
         const salt = toB64(crypto.getRandomValues(new Uint8Array(16)));
+        const ak = val('suAdminKey').trim();
+        if (ak) {
+          // 관리자: 관리자 키가 맞으면 문자 승인 없이 바로 가입
+          if ((await sha256hex(ak.toUpperCase())) !== ADMIN_KEY_HASH) return setErr('관리자 키가 맞지 않아요. 관리자가 아니면 칸을 비워 두세요.');
+          const u = { id, name, salt, hash: await hashPw(pw, salt), admin: true, createdAt: Date.now() };
+          await Store.putUser(u); S.users = await Store.users();
+          S.auth.admin.unlocked = true; await Store.setMeta('admin', true);
+          S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
+          toast(`관리자 ${name}님, 가입됐어요. 다음부터는 자동으로 로그인돼요.`);
+          return enterApp(u);
+        }
         A.req = { name, id, salt, hash: await hashPw(pw, salt), code: newRequestCode(), expires: Date.now() + REQ_MINUTES * 60000, tries: 0 };
         A.err = ''; render(); startReqTimer();
       } },
@@ -903,8 +920,12 @@ function renderAuth() {
         authField('suId', '아이디', { placeholder: '영어 소문자·숫자 4~20자', value: d.id || '' }),
         authField('suPw', '비밀번호', { type: 'password', placeholder: '6자 이상', autocomplete: 'new-password' }),
         authField('suPw2', '비밀번호 재입력', { type: 'password', placeholder: '한 번 더 입력', autocomplete: 'new-password' }),
+        h('details', { class: 'adm', open: !!A.adminSignup },
+          h('summary', null, '관리자이신가요? 관리자 키로 바로 가입'),
+          authField('suAdminKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }),
+          h('p', { class: 'note', style: 'margin:4px 0 0' }, '키가 맞으면 문자 승인 없이 바로 가입돼요. 관리자가 아니면 비워 두세요.')),
         err,
-        h('button', { class: 'btn primary', type: 'submit' }, '가입 승인 요청'),
+        h('button', { class: 'btn primary', type: 'submit' }, '가입하기'),
         h('p', { class: 'note', style: 'margin:2px 0 0' }, `다음 단계에서 관리자(${ADMIN_PHONE_VIEW})에게 요청 코드를 보내고, ${REQ_MINUTES}분 안에 승인 번호를 입력하면 가입돼요.`));
       wrap.append(form, h('div', { class: 'alinks' }, back));
       return wrap;
@@ -2127,7 +2148,8 @@ if ('serviceWorker' in navigator) {
   await Store.init();
   try { S.users = await Store.users(); } catch (e) { S.users = []; }
   S.auth.admin.unlocked = !!(await Store.getMeta('admin'));
-  const sid = await Store.getMeta('session');
+  let sid = await Store.getMeta('session');
+  if (!sid) { try { sid = localStorage.getItem('toeic-voca-session'); } catch (e) {} }
   const me = S.users.find((u) => u.id === sid);
   if (me) { await enterApp(me); } else { render(); }      // 자동 로그인 / 첫 화면 로그인
   if (Store.mode === 'memory') showWarn('이 화면에서는 기기에 저장할 수 없어요. Safari에서 열어 주세요.');
