@@ -88,6 +88,8 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .claude-card .cc-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--hl);color:#1A1606;flex:none}
 .claude-card .cc-ic svg{width:22px;height:22px}
 .btn span svg{width:18px;height:18px;display:block}
+.sigbox{display:block;max-width:100%;font-family:var(--f-num);font-size:12px;line-height:1.5;word-break:break-all;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;text-align:left;user-select:all;-webkit-user-select:all}
+.reapv{margin:0;padding:10px 12px;border-radius:10px;background:var(--ex-bg);color:var(--ex);font-size:13px;font-weight:600}
 .adm{background:var(--sunk);border-radius:12px;padding:10px 12px}
 .adm summary{font-size:13px;font-weight:700;color:var(--muted);cursor:pointer}
 .adm[open] summary{margin-bottom:8px}
@@ -116,7 +118,33 @@ button{touch-action:manipulation;cursor:pointer;border:0;background:none;padding
 .phone b{font-family:var(--f-num)}
 a.btn{text-decoration:none;color:var(--ink)}
 .h1 .who{font-size:14px;font-weight:600;color:var(--muted);margin-left:8px}
-.badge-row{display:flex;justify-content:flex-end;margin-top:-6px}
+.countcol{justify-self:start;display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+button.count{display:inline-flex;align-items:center;gap:1px;cursor:pointer}
+button.count .caret{width:12px;height:12px;margin-left:4px;color:var(--muted);display:inline-flex}
+button.count .caret svg{width:12px;height:12px}
+button.count.scoped{background:var(--hl-soft);border-color:var(--hl)}
+.scopecap{font-size:11px;font-weight:600;color:var(--muted);max-width:42vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg.seg3{grid-template-columns:repeat(3,1fr)}
+.dlist{display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;max-height:38vh;overflow-y:auto}
+.drow{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line);text-align:left}
+.drow:last-child{border-bottom:0}
+.dchk{width:22px;height:22px;border-radius:6px;border:2px solid var(--line);display:grid;place-items:center}
+.dchk svg{width:14px;height:14px;opacity:0}
+.drow.on .dchk{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.drow.on .dchk svg{opacity:1}
+.dname{font-weight:600;font-size:14.5px}
+.dmeta{font-family:var(--f-num);font-size:13px;font-weight:600;text-align:right}
+.dmeta small{display:block;font-size:11px;color:var(--muted);font-weight:500}
+.scopefoot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.scopefoot b{font-family:var(--f-num)}
+.searchrow{display:flex;gap:8px}
+.searchrow .search{flex:1;min-width:0}
+.datesel{flex:none;max-width:46%;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);padding:0 10px;font-size:14px;font-weight:600}
+.li .tagdate{color:var(--muted);font-weight:500}
+.badge-row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:-6px}
+.kindsw{display:inline-grid;grid-auto-flow:column;background:var(--sunk);border-radius:999px;padding:3px;gap:2px}
+.kindsw button{height:28px;padding:0 12px;border-radius:999px;font-size:12.5px;font-weight:700;color:var(--muted)}
+.kindsw button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 .qcard,.acard{flex:1 1 0;min-height:0;border-radius:var(--r);position:relative;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;overflow:hidden}
 .qcard{background:var(--card);box-shadow:var(--shadow);transition:box-shadow .2s, transform .25s}
@@ -755,10 +783,11 @@ const SEC = { LC: 'L/C', RC: 'R/C' };
 const secOf = (it) => (it.section === 'LC' ? 'LC' : 'RC');
 const kindLabel = (it) => `${SEC[secOf(it)]} ${it.kind === 'word' ? '단어' : '예문'}`;
 const S = {
+  scope: { sec: 'all', kind: 'all', weak: false, dates: [] },
   user: null, users: [], auth: { mode: 'login', err: '', req: null, admin: { unlocked: false, code: '', result: '' } },
   tab: 'study', items: [], current: null, revealed: false, last: null,
   reg: { queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false, section: loadSection(), split: false, enText: '', koText: '' },
-  list: { q: '', filter: 'all', limit: 80 },
+  list: { q: '', filter: 'all', limit: 80, date: '' },
 };
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const keyOf = (term, kind, section) => (section === 'LC' ? 'LC' : 'RC') + '|' + kind + '|' + term.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -798,8 +827,10 @@ function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHei
 // 계정은 각자의 기기 안에만 저장돼요 (서버 없음). 비밀번호는 PBKDF2로 암호화해서 보관.
 const ADMIN_PHONE = [43, 56, 50, 49, 48, 51, 57, 48, 50, 51, 57, 48, 51].map((c) => String.fromCharCode(c)).join('');
 const ADMIN_PHONE_VIEW = '010-' + ADMIN_PHONE.slice(5, 9) + '-' + ADMIN_PHONE.slice(9);
-const ADMIN_KEY_HASH = 'afb8c3a87780471b97abf448e149f925904041416118d30017dba31568e9d1a1';
-const APPROVAL_SECRET = 'krMWphIs55Tlz7NYF1Z4dwXqZbTqtK2U';
+// 승인 코드 = 관리자 폰에서 만든 전자서명 (ECDSA P-256). 앱에는 '확인용 공개 키'만 들어 있어서 코드를 읽어도 승인 코드를 만들 수 없음.
+// 서명용 비밀 키는 관리자 키로 암호화된 상태로만 들어 있음 (관리자 키 없이는 풀 수 없음).
+const SIGN_PUB = { kty: 'EC', crv: 'P-256', x: 'IXIuXHnx_7619HvLpSfWc6iOO3FYK-I7LhzalrfOgeg', y: 'uQ_TSMCOFCkJx8SYDtPAlofUphZEG4y78s4izT_JYHE' };
+const SIGN_LOCK = { salt: 'qObao4dDg-8DtLlzowTf9A', iv: 'dJ9bgMqpJEGAsrB9', ct: 'MG68jrDRlzfgfkW9gj6JrugZrBECDVasOAwsAexlGnEoH7RO_20WQYMpxaE5E64A89Xq0rX3IYV105Y', it: 310000 };
 const REQ_MINUTES = 5;
 const enc = new TextEncoder();
 const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -809,11 +840,31 @@ async function hashPw(pw, salt) {
   return toB64(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: fromB64(salt), iterations: 150000, hash: 'SHA-256' }, k, 256));
 }
 async function sha256hex(t) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join(''); }
-async function approvalFor(code) {
-  const k = await crypto.subtle.importKey('raw', enc.encode(APPROVAL_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const g = new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode('toeic-voca|' + code.trim().toUpperCase())));
-  return String((((g[0] << 24) | (g[1] << 16) | (g[2] << 8) | g[3]) >>> 0) % 1000000).padStart(6, '0');
+const b64u = (buf) => toB64(buf).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromB64u = (t) => { const x = t.replace(/-/g, '+').replace(/_/g, '/'); return fromB64(x + '='.repeat((4 - (x.length % 4)) % 4)); };
+const APPROVAL_MSG = (code) => enc.encode('toeic-voca|v2|' + code.trim().toUpperCase());
+// 관리자 키로 서명 키 잠금 해제 (틀리면 null)
+async function unlockSigningKey(adminKey) {
+  try {
+    const base = await crypto.subtle.importKey('raw', enc.encode(String(adminKey).trim().toUpperCase()), 'PBKDF2', false, ['deriveKey']);
+    const aes = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: fromB64u(SIGN_LOCK.salt), iterations: SIGN_LOCK.it, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(SIGN_LOCK.iv) }, aes, fromB64u(SIGN_LOCK.ct)));
+  } catch (e) { return null; }
 }
+async function signApproval(code) {
+  const d = await Store.getMeta('signKey');
+  if (!d) return null;
+  const key = await crypto.subtle.importKey('jwk', { ...SIGN_PUB, d }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  return b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, APPROVAL_MSG(code)));
+}
+async function verifyApproval(code, sig) {
+  try {
+    const key = await crypto.subtle.importKey('jwk', SIGN_PUB, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, fromB64u(sig), APPROVAL_MSG(code));
+  } catch (e) { return false; }
+}
+// 문자 내용을 통째로 붙여넣어도 승인 코드만 골라냄
+function extractApproval(text) { const m = String(text || '').match(/[A-Za-z0-9_-]{80,}/g); return m ? m.sort((a, b) => b.length - a.length)[0] : ''; }
 function newRequestCode() {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', r = crypto.getRandomValues(new Uint8Array(6));
   return [...r].map((x) => A[x % A.length]).join('');
@@ -821,7 +872,15 @@ function newRequestCode() {
 const isPWA = () => !(window.claude && window.claude.use);   // Claude 안에서 열린 버전은 문자 링크가 안 열릴 수 있음
 
 async function enterApp(u) {
+  if (!u.admin && u.apv !== 2) {
+    // 보안 강화 이전에 승인된 계정은 새 방식으로 다시 승인받아야 함 (단어·기록은 그대로 보관)
+    S.user = null;
+    S.auth = { mode: 'signup', err: '', admin: S.auth.admin, req: { name: u.name, id: u.id, salt: u.salt, hash: u.hash, createdAt: u.createdAt, reapprove: true, code: newRequestCode(), expires: Date.now() + REQ_MINUTES * 60000, tries: 0 } };
+    render(); startReqTimer();
+    return;
+  }
   S.user = u;
+  ADM.hasKey = !!(await Store.getMeta('signKey'));
   await Store.setMeta('session', u.id);       // 이 기기에서 자동 로그인
   try { localStorage.setItem('toeic-voca-session', u.id); } catch (e) {}   // 예비 저장
   let all = [];
@@ -831,6 +890,7 @@ async function enterApp(u) {
   S.items = all.filter((i) => i.uid === u.id);
   const legacy = S.items.filter((i) => i.section !== 'LC' && i.section !== 'RC');
   if (legacy.length) { legacy.forEach((i) => (i.section = 'RC')); Store.putMany(legacy).catch(() => {}); }
+  S.scope = Object.assign(DEFAULT_SCOPE(), (await Store.getMeta('scope:' + u.id)) || {});
   S.current = null; S.tab = 'study';
   stopReqTimer();
   render(true);
@@ -864,7 +924,7 @@ function renderAuth() {
   const A = S.auth;
   const wrap = h('div', { class: 'scroll auth' });
   wrap.append(h('div', { class: 'brand' }, h('div', { class: 'brand-word' }, h('span', { class: 'hl' }, 'voca')), h('h1', null, '토익 단어 암기'),
-    h('p', null, A.mode === 'signup' ? '계정 만들기' : A.mode === 'admin' ? '관리자 · 가입 승인 번호 만들기' : '로그인하면 이 기기에서는 다음부터 자동으로 들어와요')));
+    h('p', null, A.mode === 'signup' ? (A.req && A.req.reapprove ? '다시 승인받기' : '계정 만들기') : A.mode === 'admin' ? '관리자 · 가입 승인 번호 만들기' : '로그인하면 이 기기에서는 다음부터 자동으로 들어와요')));
   const err = h('p', { class: 'aerr', role: 'alert', id: 'aerr', hidden: !A.err }, A.err || '');
   // 오류는 화면을 다시 그리지 않고 그 자리에 표시 (입력한 내용 유지)
   const setErr = (m) => { A.err = m; const el = document.getElementById('aerr'); if (el) { el.textContent = m; el.hidden = !m; } else render(); };
@@ -907,8 +967,11 @@ function renderAuth() {
         const ak = val('suAdminKey').trim();
         if (ak) {
           // 관리자: 관리자 키가 맞으면 문자 승인 없이 바로 가입
-          if ((await sha256hex(ak.toUpperCase())) !== ADMIN_KEY_HASH) return setErr('관리자 키가 맞지 않아요. 관리자가 아니면 칸을 비워 두세요.');
-          const u = { id, name, salt, hash: await hashPw(pw, salt), admin: true, createdAt: Date.now() };
+          setErr('관리자 키 확인 중…');
+          const dkey = await unlockSigningKey(ak);
+          if (!dkey) return setErr('관리자 키가 맞지 않아요. 관리자가 아니면 칸을 비워 두세요.');
+          await Store.setMeta('signKey', dkey);
+          const u = { id, name, salt, hash: await hashPw(pw, salt), admin: true, apv: 2, createdAt: Date.now() };
           await Store.putUser(u); S.users = await Store.users();
           S.auth.admin.unlocked = true; await Store.setMeta('admin', true);
           S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
@@ -928,7 +991,7 @@ function renderAuth() {
           h('p', { class: 'note', style: 'margin:4px 0 0' }, '키가 맞으면 문자 승인 없이 바로 가입돼요. 관리자가 아니면 비워 두세요.')),
         err,
         h('button', { class: 'btn primary', type: 'submit' }, '가입하기'),
-        h('p', { class: 'note', style: 'margin:2px 0 0' }, `다음 단계에서 관리자(${ADMIN_PHONE_VIEW})에게 요청 코드를 보내고, ${REQ_MINUTES}분 안에 승인 번호를 입력하면 가입돼요.`));
+        h('p', { class: 'note', style: 'margin:2px 0 0' }, `다음 단계에서 관리자(${ADMIN_PHONE_VIEW})에게 요청 코드를 보내고, ${REQ_MINUTES}분 안에 받은 승인 코드를 붙여넣으면 가입돼요.`));
       wrap.append(form, h('div', { class: 'alinks' }, back));
       return wrap;
     }
@@ -938,12 +1001,13 @@ function renderAuth() {
     const msg = `[토익 단어 암기] 가입 승인 요청\n이름: ${R.name}\n아이디: ${R.id}\n요청 코드: ${R.code}`;
     const smsHref = `sms:${ADMIN_PHONE}&body=${encodeURIComponent(msg)}`;
     const panel = h('div', { class: 'panel aform' },
+      R.reapprove ? h('p', { class: 'reapv' }, `${R.name}님, 보안 강화로 한 번 더 승인이 필요해요. 단어와 학습 기록은 그대로 남아 있어요.`) : null,
       h('div', { class: 'reqbox' + (expired ? ' expired' : '') },
         h('span', null, '요청 코드'), h('b', null, R.code),
         h('span', { class: 'timer' }, expired ? '시간 초과' : h('span', null, '남은 시간 ', h('b', { id: 'reqLeft' }, `${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`)))),
       h('ol', { class: 'steps', style: 'margin:4px 0 0' },
         h('li', null, '관리자에게 ', h('b', null, '요청 코드'), '를 문자로 보내요.'),
-        h('li', null, '관리자가 알려준 ', h('b', null, '승인 번호 6자리'), '를 아래에 입력해요.')),
+        h('li', null, '관리자가 답장으로 보내준 ', h('b', null, '승인 코드'), '(긴 문자)를 길게 눌러 복사한 뒤, 아래에 붙여넣어요.')),
       isPWA()
         ? [h('a', { class: 'btn ghost', href: smsHref }, '관리자에게 문자 보내기'), h('p', { class: 'note', style: 'margin:-4px 0 0;text-align:center' }, '받는 번호 ' + ADMIN_PHONE_VIEW + ' · 요청 코드가 자동으로 들어가요')]
         : h('div', { class: 'phone' }, '관리자 번호 ', h('b', null, ADMIN_PHONE_VIEW), h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(msg); toast('요청 내용을 복사했어요. 문자로 보내 주세요.'); } catch (e) { toast('번호와 요청 코드를 직접 보내 주세요.'); } } }, '요청 내용 복사')),
@@ -952,54 +1016,31 @@ function renderAuth() {
         : h('form', { class: 'aform', style: 'padding:0', onsubmit: async (e) => {
             e.preventDefault();
             if (Date.now() > R.expires) return render();
-            const n = val('suOtp').replace(/\D/g, '');
-            if (n.length !== 6) return setErr('승인 번호 6자리를 입력해 주세요.');
+            const sig = extractApproval(val('suOtp'));
+            if (!sig) return setErr('승인 코드를 붙여넣어 주세요. 관리자가 보낸 문자 전체를 붙여넣어도 돼요.');
             R.tries++;
-            if (n !== (await approvalFor(R.code))) {
+            if (!(await verifyApproval(R.code, sig))) {
               if (R.tries >= 5) { R.expires = 0; A.err = '5번 틀려서 이 요청 코드는 막혔어요. 새 요청 코드를 받아 주세요.'; return render(); }
-              return setErr(`승인 번호가 맞지 않아요. (${R.tries}/5)`);
+              return setErr(`이 요청 코드(${R.code})의 승인 코드가 아니에요. (${R.tries}/5)`);
             }
-            const u = { id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: Date.now() };
+            const prev = S.users.find((x) => x.id === R.id) || {};
+            const u = { ...prev, id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: R.createdAt || Date.now(), apv: 2 };
             await Store.putUser(u); S.users = await Store.users();
             S.auth = { mode: 'login', err: '', req: null, admin: A.admin };
-            toast(`${u.name}님, 가입을 환영해요!`);
+            toast(R.reapprove ? `${u.name}님, 다시 승인됐어요` : `${u.name}님, 가입을 환영해요!`);
             await enterApp(u);
           } },
-            authField('suOtp', '승인 번호', { inputmode: 'numeric', maxlength: '6', placeholder: '6자리 숫자', autocomplete: 'one-time-code', pattern: '[0-9]*' }),
+            h('label', { class: 'af', for: 'suOtp' }, h('span', null, '승인 코드'),
+              h('textarea', { id: 'suOtp', class: 'ai', rows: 3, placeholder: '관리자가 보낸 승인 코드(또는 문자 전체)를 붙여넣으세요', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', style: 'height:auto;padding:10px 14px;font-family:var(--f-num);font-size:13px;resize:none' })),
+            h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { try { const t = await navigator.clipboard.readText(); document.getElementById('suOtp').value = t; } catch (e) { toast('입력칸을 길게 눌러 붙여넣기 해 주세요'); } } }, '복사한 내용 붙여넣기'),
             err,
-            h('button', { class: 'btn primary', type: 'submit' }, '가입 완료')));
+            h('button', { class: 'btn primary', type: 'submit' }, R.reapprove ? '다시 승인받기' : '가입 완료')));
     wrap.append(panel, h('div', { class: 'alinks' }, back));
     return wrap;
   }
 
-  // 관리자: 요청 코드 → 승인 번호
-  const AD = A.admin;
-  const back = h('button', { class: 'alink', onclick: () => { S.auth = { ...A, mode: 'login', err: '' }; S.authOverlay = false; render(); } }, S.user ? '← 단어장으로 돌아가기' : '← 로그인으로 돌아가기');
-  if (!AD.unlocked) {
-    wrap.append(h('form', { class: 'panel aform', onsubmit: async (e) => {
-      e.preventDefault();
-      if ((await sha256hex(val('adKey').trim().toUpperCase())) !== ADMIN_KEY_HASH) return setErr('관리자 키가 맞지 않아요.');
-      AD.unlocked = true; await Store.setMeta('admin', true); A.err = ''; render();
-    } },
-      authField('adKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }),
-      err,
-      h('button', { class: 'btn primary', type: 'submit' }, '확인'),
-      h('p', { class: 'note', style: 'margin:2px 0 0' }, '한 번 확인하면 이 기기에서는 다시 묻지 않아요.')), h('div', { class: 'alinks' }, back));
-    return wrap;
-  }
-  wrap.append(h('form', { class: 'panel aform', onsubmit: async (e) => {
-    e.preventDefault();
-    const code = val('adCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== 6) return setErr('요청 코드 6자리를 입력해 주세요.');
-    AD.code = code; AD.result = await approvalFor(code); A.err = ''; render();
-  } },
-    authField('adCode', '받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: AD.code || '', style: 'text-transform:uppercase' }),
-    err,
-    h('button', { class: 'btn primary', type: 'submit' }, '승인 번호 만들기'),
-    AD.result ? h('div', { class: 'reqbox' }, h('span', null, `${AD.code}의 승인 번호`), h('b', null, AD.result),
-      h('button', { class: 'btn ghost sm', onclick: async (e) => { e.preventDefault(); try { await navigator.clipboard.writeText(AD.result); toast('승인 번호를 복사했어요'); } catch (er) { toast('번호를 직접 알려 주세요'); } } }, '복사')) : null,
-    h('p', { class: 'note', style: 'margin:2px 0 0' }, '신청자에게 승인 번호를 알려주세요. 신청자 화면의 5분 안에 입력해야 가입돼요.')), h('div', { class: 'alinks' }, back));
-  return wrap;
+  S.auth.mode = 'login';
+  return renderAuth();
 }
 
 /* ---------- 관리자 화면 (관리자 계정에만 보임) ---------- */
@@ -1007,28 +1048,46 @@ const ADM = { code: '', result: '', history: [] };
 function renderAdmin() {
   const wrap = h('div', { class: 'scroll' });
   wrap.append(h('h1', { class: 'h1' }, '관리자', h('small', { class: 'who' }, S.user.name + '님')));
-  const out = h('div', { class: 'reqbox', hidden: !ADM.result },
-    h('span', null, ADM.code ? `요청 코드 ${ADM.code}의 승인 번호` : ''), h('b', { id: 'admResult' }, ADM.result || ''),
-    h('button', { class: 'btn ghost sm', onclick: async () => { try { await navigator.clipboard.writeText(ADM.result); toast('승인 번호를 복사했어요'); } catch (e) { toast('번호를 직접 알려 주세요'); } } }, '복사'));
-  const form = h('form', { class: 'aform', onsubmit: async (e) => {
-    e.preventDefault();
-    const code = val('admCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== 6) { toast('요청 코드 6자리를 입력해 주세요'); return; }
-    ADM.code = code; ADM.result = await approvalFor(code);
-    ADM.history = [{ code, num: ADM.result, at: Date.now() }].concat(ADM.history.filter((x) => x.code !== code)).slice(0, 5);
-    render();
-  } },
-    authField('admCode', '신청자에게 받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: ADM.code, style: 'text-transform:uppercase;font-family:var(--f-num);letter-spacing:.1em' }),
-    h('button', { class: 'btn primary', type: 'submit' }, '승인 번호 만들기'));
-  wrap.append(h('div', { class: 'section' }, h('h3', null, '가입 승인'),
-    h('div', { class: 'panel aform' }, form, out,
-      h('p', { class: 'note', style: 'margin:0' }, '신청자 폰에 뜬 요청 코드를 넣고, 나온 6자리 번호를 문자로 알려주세요. 신청자가 5분 안에 입력해야 가입돼요.'))));
-  if (ADM.history.length) wrap.append(h('div', { class: 'section' }, h('h3', null, '최근 만든 승인 번호'),
-    h('div', { class: 'list' }, ADM.history.map((x) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
-      h('span', { style: 'font-family:var(--f-num);font-weight:600' }, x.code), h('span', { class: 'r' }, x.num, h('small', null, new Date(x.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }))))))));
+  if (!ADM.hasKey) {
+    // 보안 강화 전에 만든 관리자 계정: 서명 키를 한 번 불러와야 함
+    const msg = h('p', { class: 'aerr', hidden: true });
+    wrap.append(h('div', { class: 'section' }, h('h3', null, '가입 승인'), h('form', { class: 'panel aform', onsubmit: async (e) => {
+      e.preventDefault();
+      msg.textContent = '확인 중…'; msg.hidden = false;
+      const d = await unlockSigningKey(val('admKey'));
+      if (!d) { msg.textContent = '관리자 키가 맞지 않아요.'; return; }
+      await Store.setMeta('signKey', d); ADM.hasKey = true; render();
+    } },
+      h('p', { class: 'note', style: 'margin:0' }, '보안이 강화돼서, 이 기기에서 관리자 키를 한 번만 다시 입력해 주세요.'),
+      authField('admKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }), msg,
+      h('button', { class: 'btn primary', type: 'submit' }, '확인'))));
+  } else {
+    const smsText = ADM.result ? `[토익 단어 암기] 승인 코드 (요청 ${ADM.code})\n${ADM.result}` : '';
+    const out = h('div', { class: 'reqbox', hidden: !ADM.result },
+      h('span', null, ADM.code ? `요청 코드 ${ADM.code}의 승인 코드` : ''), h('code', { class: 'sigbox', id: 'admResult' }, ADM.result || ''),
+      h('button', { class: 'btn primary sm', onclick: async () => { try { await navigator.clipboard.writeText(smsText); toast('복사했어요. 신청자에게 문자로 보내 주세요.'); } catch (e) { toast('승인 코드를 길게 눌러 복사해 주세요'); } } }, '문자로 보낼 내용 복사'));
+    const form = h('form', { class: 'aform', onsubmit: async (e) => {
+      e.preventDefault();
+      const code = val('admCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (code.length !== 6) { toast('요청 코드 6자리를 입력해 주세요'); return; }
+      const sig = await signApproval(code);
+      if (!sig) { ADM.hasKey = false; render(); return; }
+      ADM.code = code; ADM.result = sig;
+      ADM.history = [{ code, at: Date.now() }].concat(ADM.history.filter((x) => x.code !== code)).slice(0, 5);
+      render();
+    } },
+      authField('admCode', '신청자에게 받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: ADM.code, style: 'text-transform:uppercase;font-family:var(--f-num);letter-spacing:.1em' }),
+      h('button', { class: 'btn primary', type: 'submit' }, '승인 코드 만들기'));
+    wrap.append(h('div', { class: 'section' }, h('h3', null, '가입 승인'),
+      h('div', { class: 'panel aform' }, form, out,
+        h('p', { class: 'note', style: 'margin:0' }, '승인 코드는 이 폰에서만 만들 수 있는 전자서명이에요. 신청자 문자에 답장으로 붙여넣어 보내면, 신청자가 5분 안에 붙여넣어야 가입돼요.'))));
+    if (ADM.history.length) wrap.append(h('div', { class: 'section' }, h('h3', null, '최근 승인한 요청 코드'),
+      h('div', { class: 'list' }, ADM.history.map((x) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
+        h('span', { style: 'font-family:var(--f-num);font-weight:600' }, x.code), h('span', { class: 'r' }, new Date(x.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })))))));
+  }
   const accList = h('div', { class: 'list' }, S.users.map((u) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
     h('span', { style: 'min-width:0' }, h('div', { class: 't', style: 'font-family:var(--f-ui);font-size:15px' }, u.name), h('div', { class: 'm' }, u.id)),
-    h('span', { class: 'badge ' + (u.admin ? 'sec-LC' : 'example'), style: 'font-size:11px' }, u.admin ? '관리자' : '사용자'))));
+    h('span', { class: 'badge ' + (u.admin ? 'sec-LC' : 'example'), style: 'font-size:11px' }, u.admin ? '관리자' : u.apv === 2 ? '사용자' : '재승인 필요'))));
   wrap.append(h('div', { class: 'section' }, h('h3', null, '이 기기의 계정'), accList,
     h('p', { class: 'note' }, '계정은 기기마다 따로 저장돼요. 다른 사람의 계정은 그 사람 폰에만 있어요.')));
   return wrap;
@@ -1039,8 +1098,11 @@ function openAdminKey() {
     const msg = h('p', { class: 'aerr', hidden: true });
     return h('form', { onsubmit: async (e) => {
       e.preventDefault();
-      if ((await sha256hex(inp.value.trim().toUpperCase())) !== ADMIN_KEY_HASH) { msg.textContent = '관리자 키가 맞지 않아요.'; msg.hidden = false; return; }
-      S.user.admin = true; await Store.putUser(S.user); S.users = await Store.users();
+      msg.textContent = '확인 중…'; msg.hidden = false;
+      const d = await unlockSigningKey(inp.value);
+      if (!d) { msg.textContent = '관리자 키가 맞지 않아요.'; return; }
+      await Store.setMeta('signKey', d); ADM.hasKey = true;
+      S.user.admin = true; S.user.apv = 2; await Store.putUser(S.user); S.users = await Store.users();
       close(); S.tab = 'admin'; render(true); toast('관리자로 등록됐어요. 관리자 탭이 생겼어요.');
     } },
       h('h2', null, '관리자 키 등록', h('button', { class: 'iconbtn', type: 'button', html: I.x, 'aria-label': '닫기', onclick: close })),
@@ -1050,8 +1112,80 @@ function openAdminKey() {
 }
 
 /* ================= 출제 로직 ================= */
+/* ---------- 암기 범위 · 등록일 ---------- */
+const DEFAULT_SCOPE = () => ({ sec: 'all', kind: 'all', weak: false, dates: [] });
+const dayKey = (ts) => { const d = new Date(ts || 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+function dayLabel(k, short) {
+  const [y, m, d] = k.split('-').map(Number);
+  if (short) return `${m}/${d}`;
+  const wd = '일월화수목금토'[new Date(y, m - 1, d).getDay()];
+  return `${y === new Date().getFullYear() ? '' : y + '년 '}${m}월 ${d}일 (${wd})`;
+}
+function dateGroups(items) {
+  const map = new Map();
+  for (const i of items) { const k = dayKey(i.createdAt); const g = map.get(k) || { key: k, count: 0, solved: 0 }; g.count++; if (i.attempts > 0) g.solved++; map.set(k, g); }
+  return [...map.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
+}
+function inScope(i, sc) {
+  sc = sc || S.scope;
+  if (sc.sec !== 'all' && secOf(i) !== sc.sec) return false;
+  if (sc.kind !== 'all' && i.kind !== sc.kind) return false;
+  if (sc.weak) { const a = accOf(i); if (a == null || a >= 0.6) return false; }
+  if (sc.dates.length && !sc.dates.includes(dayKey(i.createdAt))) return false;
+  return true;
+}
+const scopeActive = (sc) => { sc = sc || S.scope; return sc.sec !== 'all' || sc.kind !== 'all' || sc.weak || sc.dates.length > 0; };
+function scopeSummary(sc) {
+  sc = sc || S.scope;
+  const parts = [];
+  if (sc.sec !== 'all') parts.push(SEC[sc.sec]);
+  if (sc.kind !== 'all') parts.push(sc.kind === 'word' ? '단어' : '예문');
+  if (sc.weak) parts.push('취약');
+  if (sc.dates.length) parts.push(sc.dates.length === 1 ? dayLabel(sc.dates[0], true) : `${dayLabel(sc.dates.slice().sort()[0], true)} 외 ${sc.dates.length - 1}일`);
+  return parts.join(' · ');
+}
+async function saveScope() { if (S.user) await Store.setMeta('scope:' + S.user.id, S.scope); }
+function openScope() {
+  const draft = JSON.parse(JSON.stringify(S.scope));
+  openSheet((close) => {
+    const body = h('div');
+    const paint = () => {
+      body.innerHTML = '';
+      const pool = S.items.filter((i) => inScope(i, draft));
+      const seg = (key, opts) => h('div', { class: 'seg seg3' }, opts.map(([v, lab]) => h('button', { 'aria-pressed': String(draft[key] === v), onclick: () => { draft[key] = v; paint(); } }, lab)));
+      // 등록일 목록은 다른 조건(L/C·단어 등)을 적용한 개수로 보여줌
+      const base = S.items.filter((i) => inScope(i, { ...draft, dates: [] }));
+      const groups = dateGroups(base);
+      const allDates = !draft.dates.length;
+      const dateRow = (g) => {
+        const on = draft.dates.includes(g.key);
+        return h('button', { class: 'drow' + (on ? ' on' : ''), onclick: () => { draft.dates = on ? draft.dates.filter((k) => k !== g.key) : draft.dates.concat(g.key); paint(); } },
+          h('span', { class: 'dchk', html: I.check }), h('span', { class: 'dname' }, dayLabel(g.key)),
+          h('span', { class: 'dmeta' }, `${g.count}개`, h('small', null, `풀이 ${g.solved}`)));
+      };
+      body.append(
+        h('div', { class: 'form-l', style: 'margin-top:0' }, '단어장'), seg('sec', [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C']]),
+        h('div', { class: 'form-l' }, '구분'), seg('kind', [['all', '전체'], ['word', '단어'], ['example', '예문']]),
+        h('div', { class: 'toggle', style: 'margin:14px 2px 0;justify-content:space-between' }, '취약 단어만 (정답률 60% 미만)',
+          h('button', { class: 'switch', role: 'switch', 'aria-checked': String(draft.weak), 'aria-label': '취약 단어만', onclick: () => { draft.weak = !draft.weak; paint(); } })),
+        h('div', { class: 'form-l', style: 'display:flex;justify-content:space-between;align-items:center' }, h('span', null, '등록일 (여러 날 선택 가능)'),
+          h('button', { class: 'alink', style: 'padding:0', onclick: () => { draft.dates = []; paint(); } }, allDates ? '' : '전체 날짜로')),
+        h('div', { class: 'dlist' },
+          h('button', { class: 'drow' + (allDates ? ' on' : ''), onclick: () => { draft.dates = []; paint(); } }, h('span', { class: 'dchk', html: I.check }), h('span', { class: 'dname' }, '전체 날짜'), h('span', { class: 'dmeta' }, `${base.length}개`)),
+          groups.map(dateRow)),
+        h('div', { class: 'scopefoot' },
+          h('span', null, '선택한 범위 ', h('b', null, `${pool.length}개`), pool.length ? ` · 풀이 ${pool.filter((i) => i.attempts > 0).length}` : ''),
+          h('div', { class: 'row-btns', style: 'margin:0' },
+            h('button', { class: 'btn ghost sm', onclick: () => { Object.assign(draft, DEFAULT_SCOPE()); paint(); } }, '초기화'),
+            h('button', { class: 'btn primary sm', disabled: !pool.length, onclick: async () => { S.scope = draft; await saveScope(); S.current = null; S.revealed = false; close(); render(true); toast(scopeActive() ? `범위: ${scopeSummary()} (${pool.length}개)` : '전체 단어로 암기해요'); } }, '이 범위로 암기'))));
+    };
+    paint();
+    return h('div', null, h('h2', null, '암기 범위', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })), body);
+  });
+}
+
 function pickNext() {
-  const items = S.items;
+  const items = S.items.filter((i) => inScope(i));
   if (!items.length) { S.current = null; return; }
   let pool = items;
   if (items.length > 1 && S.current) pool = items.filter((i) => i.id !== S.current.id);
@@ -1156,20 +1290,39 @@ function renderStudy(animate) {
       h('button', { class: 'btn primary', onclick: () => go('add') }, h('span', { html: I.camera }), '단어 등록하기'),
       h('button', { class: 'btn ghost sm', onclick: loadSampleToStudy }, '예시 단어 10개로 둘러보기'));
   }
-  if (!S.current || !S.items.includes(S.current)) pickNext();
+  if (!S.current || !S.items.includes(S.current) || !inScope(S.current)) pickNext();
+  const pool = S.items.filter((i) => inScope(i));
+  const solved = pool.filter((i) => i.attempts > 0).length;
+  if (!S.current) {
+    return h('div', { class: 'empty' },
+      h('h2', null, '이 범위에는 암기할 단어가 없어요'),
+      h('p', null, scopeSummary() ? `지금 범위: ${scopeSummary()}` : ''),
+      h('button', { class: 'btn primary', onclick: openScope }, '범위 바꾸기'),
+      h('button', { class: 'btn ghost sm', onclick: async () => { S.scope = DEFAULT_SCOPE(); await saveScope(); render(true); } }, '전체 단어로 보기'));
+  }
   const it = S.current;
-  const solved = S.items.filter((i) => i.attempts > 0).length;
   const acc = accOf(it);
   const isEx = it.kind === 'example';
   const marks = isEx ? exampleHighlight(it) : null;
 
   const hdr = h('div', { class: 'hdr' },
-    h('div', { class: 'count', 'aria-label': `전체 ${S.items.length}개 중 ${solved}개 풀이` }, String(solved), h('small', null, '/' + S.items.length)),
+    h('div', { class: 'countcol' },
+      h('button', { class: 'count' + (scopeActive() ? ' scoped' : ''), onclick: openScope, 'aria-label': `암기 범위 ${pool.length}개 중 ${solved}개 풀이, 눌러서 범위 선택` }, String(solved), h('small', null, '/' + pool.length), h('span', { class: 'caret', html: '<svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>' })),
+      scopeActive() ? h('span', { class: 'scopecap' }, scopeSummary()) : null),
     acc != null
       ? h('div', { class: 'acc' }, h('div', { class: 'lab' }, '정답률'), h('div', { class: 'val', style: `color:${acc >= .8 ? 'var(--ok)' : acc >= .5 ? 'var(--ex)' : 'var(--no)'}` }, pct(acc)), h('div', { class: 'sub' }, `${it.correct}/${it.attempts}회`))
       : h('div', { class: 'acc' }, h('span', { class: 'tagnew' }, it.attempts === 0 ? 'NEW' : '1회 풀이')),
     h('div', { class: 'hdr-right' }, h('button', { class: 'speak', 'aria-label': '발음 듣기', html: I.speak, onclick: () => speak(it.term) })));
-  const badgeRow = h('div', { class: 'badge-row' }, h('span', { class: 'badge sec-' + secOf(it) }, SEC[secOf(it)]));
+  // 단어/예문 바로 전환 (암기 범위의 '구분'과 같은 설정)
+  const kindSwitch = h('div', { class: 'kindsw', role: 'group', 'aria-label': '단어/예문 선택' },
+    [['all', '전체'], ['word', '단어'], ['example', '예문']].map(([k, lab]) => h('button', { 'aria-pressed': String(S.scope.kind === k), onclick: async () => {
+      if (S.scope.kind === k) return;
+      const next = { ...S.scope, kind: k };
+      const n = S.items.filter((i) => inScope(i, next)).length;
+      if (!n) { toast(`지금 범위에는 ${lab === '전체' ? '' : lab + ' '}항목이 없어요`); return; }
+      S.scope = next; await saveScope(); S.current = null; S.revealed = false; render(true);
+    } }, lab)));
+  const badgeRow = h('div', { class: 'badge-row' }, kindSwitch, h('span', { class: 'badge sec-' + secOf(it) }, SEC[secOf(it)]));
 
   const q = h('section', { class: 'qcard' + (animate ? ' enter' : ''), 'aria-live': 'polite' },
     isEx ? h('div', { class: 'term-ex' + (it.term.length > 120 ? ' long' : '') }, markRange(it.term, marks.en))
@@ -1989,6 +2142,7 @@ async function runOCR() {
 function listRows() {
   const L = S.list, q = L.q.trim().toLowerCase();
   return S.items.filter((i) => {
+    if (L.date && dayKey(i.createdAt) !== L.date) return false;
     if (L.filter === 'LC' && secOf(i) !== 'LC') return false;
     if (L.filter === 'RC' && secOf(i) !== 'RC') return false;
     if (L.filter === 'word' && i.kind !== 'word') return false;
@@ -2013,7 +2167,12 @@ function renderList() {
     h('div', { class: 'stat' }, h('b', null, studied.length), h('span', null, '학습함')),
     h('div', { class: 'stat' }, h('b', null, ta ? pct(tc / ta) : '—'), h('span', null, '정답률'))));
   const search = h('input', { class: 'search', type: 'search', id: 'listSearch', placeholder: '단어 또는 뜻 검색', value: L.q, oninput: (e) => { L.q = e.target.value; L.limit = 80; refreshList(); } });
-  wrap.append(h('div', { class: 'section' }, search,
+  const groups = dateGroups(S.items);
+  if (L.date && !groups.some((g) => g.key === L.date)) L.date = '';
+  const dateSel = h('select', { class: 'datesel', id: 'listDate', 'aria-label': '등록일 선택', onchange: (e) => { L.date = e.target.value; L.limit = 80; render(); } },
+    h('option', { value: '' }, '등록일 전체'),
+    groups.map((g) => h('option', { value: g.key, selected: L.date === g.key }, `${dayLabel(g.key)} · ${g.count}개`)));
+  wrap.append(h('div', { class: 'section' }, h('div', { class: 'searchrow' }, search, dateSel),
     h('div', { class: 'chips' }, [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C'], ['word', '단어'], ['example', '예문'], ['weak', '취약 60%↓']].map(([k, lab]) =>
       h('button', { class: 'chip', 'aria-pressed': String(L.filter === k), onclick: () => { L.filter = k; L.limit = 80; render(); } }, lab)))));
   const listEl = h('div', { class: 'list', id: 'listBox' });
@@ -2029,7 +2188,7 @@ function fillList(listEl, rows) {
     const a = accOf(i);
     listEl.append(h('button', { class: 'li', onclick: () => openEdit(i) },
       h('span', { class: 'bar ' + i.kind }),
-      h('span', { style: 'min-width:0' }, h('div', { class: 'tag sec-' + secOf(i) }, SEC[secOf(i)]), h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
+      h('span', { style: 'min-width:0' }, h('div', { class: 'tag sec-' + secOf(i) }, SEC[secOf(i)], h('span', { class: 'tagdate' }, ' · ' + dayLabel(dayKey(i.createdAt), true))), h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
       h('span', { class: 'r', style: a != null ? `color:${a >= .8 ? 'var(--ok)' : a >= .5 ? 'var(--ex)' : 'var(--no)'}` : '' }, a != null ? pct(a) : '', h('small', null, i.attempts ? `${i.attempts}회` : '미학습'))));
   });
   if (rows.length > S.list.limit) listEl.append(h('button', { class: 'more', onclick: () => { S.list.limit += 200; refreshList(); } }, `더 보기 (${rows.length - S.list.limit}개 남음)`));
@@ -2067,7 +2226,7 @@ function openEdit(item) {
       h('div', { class: 'form-l' }, '구분'), seg,
       h('div', { class: 'form-l' }, '영어'), t,
       h('div', { class: 'form-l' }, '뜻'), m,
-      h('div', { class: 'form-l' }, '학습 기록'),
+      h('div', { class: 'form-l' }, `학습 기록 · ${dayLabel(dayKey(item.createdAt))} 등록`),
       h('div', { class: 'kv' },
         h('div', null, h('b', null, item.attempts), h('span', null, '푼 횟수')),
         h('div', null, h('b', null, accOf(item) != null ? pct(accOf(item)) : '—'), h('span', null, '정답률')),
