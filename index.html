@@ -163,6 +163,10 @@ button.count.scoped{background:var(--hl-soft);border-color:var(--hl)}
 .frow .fseg{flex:1.4;min-width:0}
 .frow .fseg button{height:34px;font-size:13px}
 .frow .chip{flex:none;height:40px}
+.fchips{flex-wrap:wrap;overflow:visible;margin-top:0;gap:8px 14px}
+.fgroup{display:inline-flex;gap:6px}
+.fsep{width:1px;height:20px;background:var(--line);align-self:center}
+.fsum{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;color:var(--muted);padding:0 2px}
 .dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .dcell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;height:48px;border-radius:11px;background:var(--card);border:1px solid var(--line)}
 .dcell b{font-size:13.5px}
@@ -839,7 +843,7 @@ const S = {
   user: null, users: [], auth: { mode: 'login', err: '', req: null, admin: { unlocked: false, code: '', result: '' } },
   tab: 'study', items: [], current: null, revealed: false, last: null,
   reg: { day: null, mode: 'device', queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false, section: loadSection(), split: false, enText: '', koText: '' },
-  list: { q: '', limit: 80, day: '', sec: 'all', kind: 'all', weak: false },
+  list: { q: '', limit: 80, days: [], secs: [], kinds: [], weak: false },
 };
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const keyOf = (term, kind, section) => (section === 'LC' ? 'LC' : 'RC') + '|' + kind + '|' + term.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -2286,13 +2290,33 @@ async function runOCR() {
 /* ================= 단어장 화면 ================= */
 function listRows() {
   const L = S.list, q = L.q.trim().toLowerCase();
+  // 같은 묶음 안에서는 '또는', 묶음끼리는 '그리고' (아무것도 안 고르면 전체)
   return S.items.filter((i) => {
-    if (L.day !== '' && L.day != null && dayOf(i) !== Number(L.day)) return false;   // 1. 일차
-    if (L.sec !== 'all' && secOf(i) !== L.sec) return false;                          // 2. L/C·R/C
-    if (L.kind !== 'all' && i.kind !== L.kind) return false;                          // 3. 단어/예문
-    if (L.weak) { const a = accOf(i); if (a == null || a >= 0.6) return false; }       // 4. 취약
+    if (L.days.length && !L.days.includes(dayOf(i))) return false;     // 1. 일차
+    if (L.secs.length && !L.secs.includes(secOf(i))) return false;     // 2. L/C·R/C
+    if (L.kinds.length && !L.kinds.includes(i.kind)) return false;     // 3. 단어/예문
+    if (L.weak) { const a = accOf(i); if (a == null || a >= 0.6) return false; }   // 4. 취약
     return !q || i.term.toLowerCase().includes(q) || i.meaning.toLowerCase().includes(q);
   }).sort((a, b) => L.weak ? accOf(a) - accOf(b) : (dayOf(a) || 99) - (dayOf(b) || 99) || b.createdAt - a.createdAt);
+}
+function openListDays() {
+  const L = S.list;
+  openSheet((close) => {
+    const body = h('div');
+    const paint = () => {
+      body.innerHTML = '';
+      const counts = new Map(dayGroups(S.items).map((g) => [g.key, g]));
+      const btn = (n) => { const g = counts.get(n), on = L.days.includes(n);
+        return h('button', { class: 'dcell' + (on ? ' on' : ''), disabled: !g && !on, onclick: () => { L.days = on ? L.days.filter((k) => k !== n) : L.days.concat(n); paint(); } },
+          h('b', null, n ? `${n}일차` : '미지정'), h('small', null, g ? `${g.count}개` : '0')); };
+      body.append(h('div', { class: 'dgrid' }, DAYS.map(btn), counts.has(0) ? btn(0) : null),
+        h('div', { class: 'row-btns', style: 'margin-top:14px' },
+          h('button', { class: 'btn ghost sm', onclick: () => { L.days = []; paint(); } }, '전체 일차'),
+          h('button', { class: 'btn primary sm', style: 'flex:1', onclick: () => { L.limit = 80; close(); render(); } }, '적용')));
+    };
+    paint();
+    return h('div', null, h('h2', null, '일차 선택 (여러 개 가능)', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: () => { close(); render(); } })), body);
+  });
 }
 function renderList() {
   const L = S.list, items = S.items;
@@ -2310,18 +2334,18 @@ function renderList() {
     h('div', { class: 'stat' }, h('b', null, studied.length), h('span', null, '학습함')),
     h('div', { class: 'stat' }, h('b', null, ta ? pct(tc / ta) : '—'), h('span', null, '정답률'))));
   const search = h('input', { class: 'search', type: 'search', id: 'listSearch', placeholder: '단어 또는 뜻 검색', value: L.q, oninput: (e) => { L.q = e.target.value; L.limit = 80; refreshList(); } });
-  const groups = dayGroups(S.items);
-  if (L.day !== '' && !groups.some((g) => g.key === Number(L.day))) L.day = '';
-  const set = (k, v) => { L[k] = v; L.limit = 80; render(); };
-  const daySel = h('select', { class: 'datesel', id: 'listDay', 'aria-label': '일차', onchange: (e) => set('day', e.target.value) },
-    h('option', { value: '' }, '일차 전체'),
-    groups.map((g) => h('option', { value: String(g.key), selected: L.day !== '' && Number(L.day) === g.key }, `${dayLabel(g.key)} · ${g.count}개`)));
-  const seg = (k, opts) => h('div', { class: 'seg seg3 fseg' }, opts.map(([v, lab]) => h('button', { 'aria-pressed': String(L[k] === v), onclick: () => set(k, v) }, lab)));
+  const toggle = (k, v) => { L[k] = L[k].includes(v) ? L[k].filter((x) => x !== v) : L[k].concat(v); L.limit = 80; render(); };
+  const chip = (k, v, lab) => h('button', { class: 'chip', 'aria-pressed': String(L[k].includes(v)), onclick: () => toggle(k, v) }, lab);
+  const dayText = !L.days.length ? '일차 전체' : L.days.length <= 3 ? L.days.slice().sort((a, b) => (a || 99) - (b || 99)).map((n) => (n ? `${n}` : '미지정')).join('·') + (L.days.every((n) => n) ? '일차' : '') : `일차 ${L.days.length}개`;
+  const anyFilter = L.days.length || L.secs.length || L.kinds.length || L.weak;
   wrap.append(h('div', { class: 'section filters' },
     search,
-    h('div', { class: 'frow' }, daySel, seg('sec', [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C']])),
-    h('div', { class: 'frow' }, seg('kind', [['all', '전체'], ['word', '단어'], ['example', '예문']]),
-      h('button', { class: 'chip', 'aria-pressed': String(L.weak), onclick: () => set('weak', !L.weak) }, '취약 60%↓'))));
+    h('div', { class: 'chips fchips' },
+      h('span', { class: 'fgroup' }, h('button', { class: 'chip daychip-btn', 'aria-pressed': String(L.days.length > 0), onclick: openListDays }, dayText, ' ▾')),
+      h('span', { class: 'fgroup' }, chip('secs', 'LC', 'L/C'), chip('secs', 'RC', 'R/C')),
+      h('span', { class: 'fgroup' }, chip('kinds', 'word', '단어'), chip('kinds', 'example', '예문')),
+      h('span', { class: 'fgroup' }, h('button', { class: 'chip', 'aria-pressed': String(L.weak), onclick: () => { L.weak = !L.weak; L.limit = 80; render(); } }, '취약 60%↓'))),
+    anyFilter ? h('div', { class: 'fsum' }, h('span', null, `${rows.length}개 표시`), h('button', { class: 'alink', style: 'padding:0', onclick: () => { Object.assign(L, { days: [], secs: [], kinds: [], weak: false, limit: 80 }); render(); } }, '필터 모두 해제')) : null));
   const listEl = h('div', { class: 'list', id: 'listBox' });
   fillList(listEl, rows);
   wrap.append(listEl);
