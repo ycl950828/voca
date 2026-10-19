@@ -157,6 +157,21 @@ button.count.scoped{background:var(--hl-soft);border-color:var(--hl)}
 .echips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .daychip{font-size:11.5px;font-weight:700;color:var(--muted);background:var(--sunk);border-radius:999px;padding:4px 9px}
 .daychip.none{color:var(--no)}
+.filters{display:flex;flex-direction:column;gap:8px}
+.frow{display:flex;gap:8px;align-items:center}
+.frow .datesel{flex:1;max-width:none;min-width:0}
+.frow .fseg{flex:1.4;min-width:0}
+.frow .fseg button{height:34px;font-size:13px}
+.frow .chip{flex:none;height:40px}
+.dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.dcell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;height:48px;border-radius:11px;background:var(--card);border:1px solid var(--line)}
+.dcell b{font-size:13.5px}
+.dcell small{font-family:var(--f-num);font-size:11px;color:var(--muted)}
+.dcell.on{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.dcell.on small{color:var(--on-primary);opacity:.8}
+.dcell[disabled]{opacity:.35}
+.unified .cc-ic.plain{background:var(--primary);color:var(--on-primary)}
+button.unified{width:100%;text-align:left}
 .bulkbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:13px;font-weight:600;color:var(--muted)}
 .bulkbar .datesel{height:36px;font-size:13px}
 .li .tagdate{color:var(--muted);font-weight:500}
@@ -728,20 +743,26 @@ const I = {
 const Store = {
   mode: 'memory', db: null,
   async init() {
-    try {
-      this.db = await new Promise((res, rej) => {
-        const r = indexedDB.open('toeic-voca', 2);
-        r.onupgradeneeded = () => {
-          const db = r.result;
-          if (!db.objectStoreNames.contains('items')) db.createObjectStore('items', { keyPath: 'id' });
-          if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'id' });   // 계정 (이 기기 안에만 저장)
-          if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');                         // 자동 로그인 정보 등
-        };
-        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-        setTimeout(() => rej(new Error('timeout')), 4000);
-      });
-      this.mode = 'idb';
-    } catch (e) {
+    const open = (ms) => new Promise((res, rej) => {
+      const r = indexedDB.open('toeic-voca', 2);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains('items')) db.createObjectStore('items', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('users')) db.createObjectStore('users', { keyPath: 'id' });   // 계정 (이 기기 안에만 저장)
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');                         // 자동 로그인 정보 등
+      };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      r.onblocked = () => {};   // 예전 화면이 열려 있으면 닫힐 때까지 기다림
+      setTimeout(() => rej(new Error('timeout')), ms);
+    });
+    // 업데이트 직후엔 저장소 열기가 늦을 수 있어서, 넉넉히 기다리고 다시 시도 (예전엔 4초 만에 포기하고 빈 저장소를 썼음)
+    if (window.indexedDB) {
+      for (const ms of [10000, 10000, 15000]) {
+        try { this.db = await open(ms); this.mode = 'idb'; break; } catch (e) { await new Promise((r) => setTimeout(r, 400)); }
+      }
+    }
+    if (this.db) this.db.onversionchange = () => { try { this.db.close(); } catch (e) {} location.reload(); };
+    if (this.mode !== 'idb') {
       try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); this.mode = 'local'; }
       catch (e2) { this.mode = 'memory'; }
     }
@@ -754,6 +775,7 @@ const Store = {
     return [];
   },
   async putMany(items) {
+    this.mirrorItems();
     if (this.mode === 'idb') return new Promise((res, rej) => {
       const t = this.db.transaction('items', 'readwrite'); const s = t.objectStore('items');
       items.forEach((it) => s.put(it)); t.oncomplete = () => res(); t.onerror = () => rej(t.error);
@@ -762,6 +784,7 @@ const Store = {
   },
   async put(item) { return this.putMany([item]); },
   async del(ids) {
+    this.mirrorItems();
     if (this.mode === 'idb') return new Promise((res, rej) => {
       const t = this.db.transaction('items', 'readwrite'); const s = t.objectStore('items');
       ids.forEach((id) => s.delete(id)); t.oncomplete = () => res(); t.onerror = () => rej(t.error);
@@ -775,13 +798,22 @@ const Store = {
     } catch (e) { showWarn('저장 공간이 부족해요. 백업을 내보내 두세요.'); }
   },
   mem: { users: [], meta: {} },
+  // 예비 사본: 계정·단어를 localStorage에도 복사 (기본 저장소가 비면 여기서 되살림)
+  mirrorUsers(list) { try { localStorage.setItem('toeic-voca-m-users', JSON.stringify(list)); } catch (e) {} },
+  _mt: null,
+  mirrorItems() {
+    clearTimeout(this._mt);
+    this._mt = setTimeout(() => { try { if (S.user) localStorage.setItem('toeic-voca-m-items:' + S.user.id, JSON.stringify(S.items)); } catch (e) {} }, 600);
+  },
+  readMirror(key) { try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return Array.isArray(v) ? v : []; } catch (e) { return []; } },
   async users() {
     if (this.mode === 'idb') return new Promise((res, rej) => { const r = this.db.transaction('users', 'readonly').objectStore('users').getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
     if (this.mode === 'local') { try { return JSON.parse(localStorage.getItem('toeic-voca-users') || '[]'); } catch (e) { return []; } }
     return this.mem.users.slice();
   },
   async putUser(u) {
-    if (this.mode === 'idb') return new Promise((res, rej) => { const t = this.db.transaction('users', 'readwrite'); t.objectStore('users').put(u); t.oncomplete = () => res(); t.onerror = () => rej(t.error); });
+    this.mirrorUsers((this._users || []).filter((x) => x.id !== u.id).concat(u));
+    if (this.mode === 'idb') return new Promise((res, rej) => { const t = this.db.transaction('users', 'readwrite'); t.objectStore('users').put(u); t.oncomplete = () => { this.users().then((l) => { this._users = l; this.mirrorUsers(l); }); res(); }; t.onerror = () => rej(t.error); });
     const list = (await this.users()).filter((x) => x.id !== u.id).concat(u);
     if (this.mode === 'local') localStorage.setItem('toeic-voca-users', JSON.stringify(list)); else this.mem.users = list;
   },
@@ -807,7 +839,7 @@ const S = {
   user: null, users: [], auth: { mode: 'login', err: '', req: null, admin: { unlocked: false, code: '', result: '' } },
   tab: 'study', items: [], current: null, revealed: false, last: null,
   reg: { day: null, mode: 'device', queue: [], cur: null, entries: [], busy: false, status: '', progress: 0, raw: '', showText: false, twoCol: false, section: loadSection(), split: false, enText: '', koText: '' },
-  list: { q: '', filter: 'all', limit: 80, day: '' },
+  list: { q: '', limit: 80, day: '', sec: 'all', kind: 'all', weak: false },
 };
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const keyOf = (term, kind, section) => (section === 'LC' ? 'LC' : 'RC') + '|' + kind + '|' + term.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -908,6 +940,13 @@ async function enterApp(u) {
   const orphan = all.filter((i) => !i.uid);     // 로그인 기능 이전에 저장한 단어는 이 기기의 첫 로그인 계정으로
   if (orphan.length) { orphan.forEach((i) => (i.uid = u.id)); await Store.putMany(orphan).catch(() => {}); }
   S.items = all.filter((i) => i.uid === u.id);
+  if (!S.items.length && Store.mode === 'idb') {
+    const back = Store.readMirror('toeic-voca-m-items:' + u.id).concat(Store.readMirror('toeic-voca-items').filter((i) => i && (i.uid === u.id || !i.uid)));
+    const ids = new Set(); const got = [];
+    for (const i of back) { if (i && i.id && i.term && !ids.has(i.id)) { ids.add(i.id); got.push({ ...i, uid: u.id }); } }
+    if (got.length) { await Store.putMany(got).catch(() => {}); S.items = got; setTimeout(() => toast(`예비 사본에서 단어 ${got.length}개를 되살렸어요`), 400); }
+  }
+  Store.mirrorItems();
   const legacy = S.items.filter((i) => i.section !== 'LC' && i.section !== 'RC');
   if (legacy.length) { legacy.forEach((i) => (i.section = 'RC')); Store.putMany(legacy).catch(() => {}); }
   const savedScope = (await Store.getMeta('scope:' + u.id)) || {};
@@ -916,6 +955,28 @@ async function enterApp(u) {
   S.current = null; S.tab = 'study';
   stopReqTimer();
   render(true);
+}
+// 로그인 화면에서 백업 파일로 계정 + 단어 + 학습 기록 복구
+async function restoreFromBackup(file) {
+  if (!file) return;
+  let obj;
+  try { obj = JSON.parse(await file.text()); } catch (e) { toast('백업 파일을 읽지 못했어요'); return; }
+  const a = obj && obj.account;
+  if (!a || !a.id || !a.hash || !a.salt) { toast('이 백업에는 계정 정보가 없어요. 계정을 만든 뒤 단어장 메뉴에서 불러와 주세요.'); return; }
+  // 승인받은 계정인지 서명으로 확인 (파일을 고쳐서 승인을 건너뛸 수 없게)
+  const apvOk = !!a.admin || (a.apvCode && a.apvSig && (await verifyApproval(a.apvCode, a.apvSig)));
+  const exist = S.users.find((u) => u.id === a.id);
+  if (!exist) {
+    await Store.putUser({ id: a.id, name: a.name || a.id, salt: a.salt, hash: a.hash, admin: !!a.admin, apv: apvOk ? 2 : undefined, apvCode: a.apvCode, apvSig: a.apvSig, createdAt: a.createdAt || Date.now() });
+    S.users = await Store.users(); Store._users = S.users;
+  }
+  const items = (Array.isArray(obj.items) ? obj.items : []).filter((i) => i && i.id && i.term && i.meaning).map((i) => ({ ...i, uid: a.id }));
+  if (items.length) { const had = new Set((await Store.all()).map((i) => i.id)); await Store.putMany(items.filter((i) => !had.has(i.id))); }
+  try { localStorage.setItem('toeic-voca-m-items:' + a.id, JSON.stringify(items)); } catch (e) {}
+  S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
+  render();
+  const idEl = document.getElementById('loginId'); if (idEl) idEl.value = a.id;
+  toast(`${a.name || a.id} 계정${exist ? '' : '을 복구하고'} 단어 ${items.length}개를 되살렸어요. 비밀번호로 로그인해 주세요.`);
 }
 async function logout() {
   await Store.setMeta('session', null);
@@ -968,6 +1029,8 @@ function renderAuth() {
     wrap.append(form,
       h('div', { class: 'alinks' },
         h('button', { class: 'btn ghost', onclick: () => { S.auth = { ...A, mode: 'signup', err: '', req: null }; render(); } }, '계정 만들기'),
+        h('label', { class: 'alink', style: 'position:relative;cursor:pointer' }, '백업 파일로 계정 복구',
+          h('input', { type: 'file', accept: '.json,application/json,text/plain', style: 'position:absolute;inset:0;opacity:0;width:100%', onchange: (e) => restoreFromBackup(e.target.files[0]) })),
 ));
     return wrap;
   }
@@ -1046,7 +1109,7 @@ function renderAuth() {
               return setErr(`이 요청 코드(${R.code})의 승인 코드가 아니에요. (${R.tries}/5)`);
             }
             const prev = S.users.find((x) => x.id === R.id) || {};
-            const u = { ...prev, id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: R.createdAt || Date.now(), apv: 2 };
+            const u = { ...prev, id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: R.createdAt || Date.now(), apv: 2, apvCode: R.code, apvSig: sig };   // 승인 증명 보관 (백업 복구 때 확인)
             await Store.putUser(u); S.users = await Store.users();
             S.auth = { mode: 'login', err: '', req: null, admin: A.admin };
             toast(R.reapprove ? `${u.name}님, 다시 승인됐어요` : `${u.name}님, 가입을 환영해요!`);
@@ -1157,13 +1220,13 @@ const scopeActive = (sc) => { sc = sc || S.scope; return sc.sec !== 'all' || sc.
 function scopeSummary(sc) {
   sc = sc || S.scope;
   const parts = [];
-  if (sc.sec !== 'all') parts.push(SEC[sc.sec]);
-  if (sc.kind !== 'all') parts.push(sc.kind === 'word' ? '단어' : '예문');
-  if (sc.weak) parts.push('취약');
   if (sc.days.length) {
     const d = sc.days.slice().sort((a, b) => (a || 99) - (b || 99));
     parts.push(d.length <= 3 ? d.map((n) => (n ? n : '미지정')).join('·') + (d.every((n) => n) ? '일차' : '') : `${dayLabel(d[0])} 외 ${d.length - 1}개`);
   }
+  if (sc.sec !== 'all') parts.push(SEC[sc.sec]);
+  if (sc.kind !== 'all') parts.push(sc.kind === 'word' ? '단어' : '예문');
+  if (sc.weak) parts.push('취약');
   return parts.join(' · ');
 }
 async function saveScope() { if (S.user) await Store.setMeta('scope:' + S.user.id, S.scope); }
@@ -1175,26 +1238,23 @@ function openScope() {
       body.innerHTML = '';
       const pool = S.items.filter((i) => inScope(i, draft));
       const seg = (key, opts) => h('div', { class: 'seg seg3' }, opts.map(([v, lab]) => h('button', { 'aria-pressed': String(draft[key] === v), onclick: () => { draft[key] = v; paint(); } }, lab)));
-      // 일차 목록은 다른 조건(L/C·단어 등)을 적용한 개수로 보여줌
+      // 1. 일차 (다른 조건을 적용한 개수로 표시) → 2. L/C·R/C → 3. 단어/예문 → 4. 취약
       const base = S.items.filter((i) => inScope(i, { ...draft, days: [] }));
-      const groups = dayGroups(base);
-      const allDates = !draft.days.length;
-      const dateRow = (g) => {
-        const on = draft.days.includes(g.key);
-        return h('button', { class: 'drow' + (on ? ' on' : ''), onclick: () => { draft.days = on ? draft.days.filter((k) => k !== g.key) : draft.days.concat(g.key); paint(); } },
-          h('span', { class: 'dchk', html: I.check }), h('span', { class: 'dname' }, dayLabel(g.key)),
-          h('span', { class: 'dmeta' }, `${g.count}개`, h('small', null, `풀이 ${g.solved}`)));
+      const counts = new Map(dayGroups(base).map((g) => [g.key, g]));
+      const allDays = !draft.days.length;
+      const dayBtn = (n) => {
+        const g = counts.get(n), on = draft.days.includes(n);
+        return h('button', { class: 'dcell' + (on ? ' on' : ''), disabled: !g && !on, onclick: () => { draft.days = on ? draft.days.filter((k) => k !== n) : draft.days.concat(n); paint(); } },
+          h('b', null, n ? `${n}일차` : '미지정'), h('small', null, g ? `${g.count}개` : '0'));
       };
       body.append(
-        h('div', { class: 'form-l', style: 'margin-top:0' }, '단어장'), seg('sec', [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C']]),
+        h('div', { class: 'form-l', style: 'margin-top:0;display:flex;justify-content:space-between;align-items:center' }, h('span', null, '일차 (여러 개 선택 가능)'),
+          allDays ? h('span', null, '전체 일차') : h('button', { class: 'alink', style: 'padding:0', onclick: () => { draft.days = []; paint(); } }, '전체 일차로')),
+        h('div', { class: 'dgrid' }, DAYS.map(dayBtn), counts.has(0) ? dayBtn(0) : null),
+        h('div', { class: 'form-l' }, '단어장'), seg('sec', [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C']]),
         h('div', { class: 'form-l' }, '구분'), seg('kind', [['all', '전체'], ['word', '단어'], ['example', '예문']]),
         h('div', { class: 'toggle', style: 'margin:14px 2px 0;justify-content:space-between' }, '취약 단어만 (정답률 60% 미만)',
           h('button', { class: 'switch', role: 'switch', 'aria-checked': String(draft.weak), 'aria-label': '취약 단어만', onclick: () => { draft.weak = !draft.weak; paint(); } })),
-        h('div', { class: 'form-l', style: 'display:flex;justify-content:space-between;align-items:center' }, h('span', null, '일차 (여러 개 선택 가능)'),
-          h('button', { class: 'alink', style: 'padding:0', onclick: () => { draft.days = []; paint(); } }, allDates ? '' : '전체 일차로')),
-        h('div', { class: 'dlist' },
-          h('button', { class: 'drow' + (allDates ? ' on' : ''), onclick: () => { draft.days = []; paint(); } }, h('span', { class: 'dchk', html: I.check }), h('span', { class: 'dname' }, '전체 일차'), h('span', { class: 'dmeta' }, `${base.length}개`)),
-          groups.map(dateRow)),
         h('div', { class: 'scopefoot' },
           h('span', null, '선택한 범위 ', h('b', null, `${pool.length}개`), pool.length ? ` · 풀이 ${pool.filter((i) => i.attempts > 0).length}` : ''),
           h('div', { class: 'row-btns', style: 'margin:0' },
@@ -1405,16 +1465,23 @@ function renderAdd() {
     h('div', { class: 'dp-head' }, h('b', null, '몇 일차 단어인가요?'), h('span', { class: 'note', style: 'margin:0' }, R.day ? `${R.day}일차로 저장돼요` : '저장하려면 일차를 골라 주세요')),
     h('div', { class: 'dp-grid', role: 'group', 'aria-label': '일차 선택' }, DAYS.map((n) => h('button', { 'aria-pressed': String(R.day === n), 'aria-label': `${n}일차`, onclick: () => { setDay(n); render(); } }, String(n))))));
 
-  // 2) 통합 등록 (Claude): L/C·R/C를 사진마다 자동 판단
+  // 2) 직접 입력
+  const addManual = () => { R.entries.push({ term: '', meaning: '', kind: 'word', section: R.section, include: true }); render(); setTimeout(() => { const t = document.querySelectorAll('.entry .fld.term'); if (t.length) { t[t.length - 1].focus(); t[t.length - 1].scrollIntoView({ block: 'center' }); } }, 60); };
+  wrap.append(h('div', { class: 'section' }, h('h3', null, '직접 입력'),
+    h('button', { class: 'unified', onclick: addManual },
+      h('span', { class: 'cc-ic plain', html: I.plus }),
+      h('span', { class: 'u-text' }, h('b', null, '단어 직접 입력하기'), h('span', null, '영어와 뜻을 써서 한 개씩 추가해요')))));
+
+  // 3) 통합 등록 (Claude): L/C·R/C를 사진마다 자동 판단
   const claudeInput = h('input', { type: 'file', accept: 'image/*', multiple: true, 'aria-label': '통합 등록할 사진 선택', onchange: (e) => onFiles(e.target.files, 'claude') });
   const openText = () => { R.showText = true; render(); setTimeout(() => { const t = document.getElementById(R.split && isLC ? 'enText' : 'rawText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center' }); } }, 50); };
   if (CL.sample) {
-    wrap.append(h('div', { class: 'section' }, h('label', { class: 'unified' },
+    wrap.append(h('div', { class: 'section' }, h('h3', null, '사진으로 등록'), h('label', { class: 'unified' },
       h('span', { class: 'cc-ic', html: I.spark }),
       h('span', { class: 'u-text' }, h('b', null, '통합 등록'), h('span', null, '사진만 올리면 Claude가 L/C·R/C를 알아서 나눠서 정리해요')),
       h('span', { class: 'rec', style: 'position:static' }, '가장 정확'), claudeInput)));
   } else {
-    wrap.append(h('div', { class: 'section' }, h('div', { class: 'panel claude-card' },
+    wrap.append(h('div', { class: 'section' }, h('h3', null, '사진으로 등록'), h('div', { class: 'panel claude-card' },
       h('div', { class: 'cc-head' }, h('span', { class: 'cc-ic', html: I.spark }), h('div', null, h('b', null, '통합 등록 (Claude 앱)'), h('span', { class: 'rec', style: 'position:static;margin-left:6px' }, '가장 정확'),
         h('p', { class: 'note', style: 'margin:2px 0 0' }, 'L/C·R/C를 고를 필요 없어요. 사진마다 Claude가 형식을 판단하고, 여러 줄 예문과 표의 좌우 칸도 정확히 짝지어요.'))),
       h('ol', { class: 'steps' },
@@ -1425,16 +1492,15 @@ function renderAdd() {
       h('div', { class: 'row-btns' }, h('button', { class: 'btn primary sm', onclick: copyPrompt }, '요청 문구 복사'), h('button', { class: 'btn ghost sm', onclick: openText }, '결과 붙여넣기')))));
   }
 
-  // 3) 다른 방법: 형식(L/C·R/C)을 직접 골라 기기에서 인식 / 붙여넣기 / 직접 입력
+  // 4) 다른 방법: 형식(L/C·R/C)을 골라 기기에서 인식 / 텍스트 붙여넣기
   const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, 'aria-label': '기기에서 인식할 사진 선택', onchange: (e) => onFiles(e.target.files, 'device') });
-  wrap.append(h('div', { class: 'section' }, h('h3', null, '다른 방법 · 형식을 골라 주세요'),
+  wrap.append(h('div', { class: 'section' }, h('h3', null, '다른 방법 (형식을 골라서)'),
     h('div', { class: 'seg secseg', role: 'group', 'aria-label': '단어장 종류' },
       [['LC', 'L/C 단어장', '표 형식'], ['RC', 'R/C 단어장', 'R/C Vocab']].map(([k, lab, sub2]) =>
         h('button', { 'data-sec': k, 'aria-pressed': String(R.section === k), onclick: () => { setSection(k); render(); } }, h('b', null, lab), h('small', null, sub2)))),
     h('div', { class: 'sources', style: 'margin-top:12px' },
       h('label', { class: 'src' }, h('div', { class: 'ic', html: I.camera }), h('b', null, '기기에서 인식'), h('span', null, isLC ? '왼쪽·오른쪽 칸을\n줄마다 자동으로 짝지음' : '촬영 또는 앨범 선택\n여러 장 가능'), fileInput),
       h('button', { class: 'src', onclick: openText }, h('div', { class: 'ic', html: I.text }), h('b', null, '텍스트 붙여넣기'), h('span', null, '아이폰 텍스트 인식으로\n복사한 내용'))),
-    h('button', { class: 'btn ghost sm', style: 'margin-top:10px', onclick: () => { R.entries.push({ term: '', meaning: '', kind: 'word', section: R.section, include: true }); render(); setTimeout(() => { const t = document.querySelectorAll('.entry .fld.term'); if (t.length) { t[t.length - 1].focus(); t[t.length - 1].scrollIntoView({ block: 'center' }); } }, 60); } }, h('span', { html: I.plus }), '직접 입력하기'),
     h('details', { class: 'tip', style: 'margin-top:12px' },
       h('summary', null, isLC ? '표 형식(L/C) 기기 인식 요령' : '아이폰 텍스트 인식으로 더 정확하게'),
       isLC
@@ -1553,9 +1619,9 @@ function renderEntries() {
       h('button', { class: 'chk', html: I.check, 'aria-label': '선택', onclick: () => { e.include = !e.include; row.classList.toggle('off', !e.include); updateSaveBar(); } }),
       h('div', { class: 'fields' },
         h('div', { class: 'echips' },
+          h('span', { class: 'daychip' + (e.day || R.day ? '' : ' none') }, e.day || R.day ? `${e.day || R.day}일차` : '일차 미선택'),
           h('button', { class: 'badge sec-' + (e.section === 'LC' ? 'LC' : e.section === 'RC' ? 'RC' : R.section), onclick: () => { e.section = (e.section || R.section) === 'LC' ? 'RC' : 'LC'; render(); } }, SEC[e.section || R.section], ' ⇄'),
-          h('button', { class: 'badge ' + e.kind, onclick: () => { e.kind = e.kind === 'word' ? 'example' : 'word'; render(); } }, e.kind === 'word' ? '단어' : '예문', ' ⇄'),
-          h('span', { class: 'daychip' + (e.day || R.day ? '' : ' none') }, e.day || R.day ? `${e.day || R.day}일차` : '일차 미선택')),
+          h('button', { class: 'badge ' + e.kind, onclick: () => { e.kind = e.kind === 'word' ? 'example' : 'word'; render(); } }, e.kind === 'word' ? '단어' : '예문', ' ⇄')),
         term, mean),
       h('button', { class: 'del', html: I.x, 'aria-label': '삭제', onclick: () => { R.entries.splice(i, 1); render(); } }));
     box.append(row);
@@ -2221,14 +2287,12 @@ async function runOCR() {
 function listRows() {
   const L = S.list, q = L.q.trim().toLowerCase();
   return S.items.filter((i) => {
-    if (L.day !== '' && L.day != null && dayOf(i) !== Number(L.day)) return false;
-    if (L.filter === 'LC' && secOf(i) !== 'LC') return false;
-    if (L.filter === 'RC' && secOf(i) !== 'RC') return false;
-    if (L.filter === 'word' && i.kind !== 'word') return false;
-    if (L.filter === 'example' && i.kind !== 'example') return false;
-    if (L.filter === 'weak') { const a = accOf(i); if (a == null || a >= 0.6) return false; }
+    if (L.day !== '' && L.day != null && dayOf(i) !== Number(L.day)) return false;   // 1. 일차
+    if (L.sec !== 'all' && secOf(i) !== L.sec) return false;                          // 2. L/C·R/C
+    if (L.kind !== 'all' && i.kind !== L.kind) return false;                          // 3. 단어/예문
+    if (L.weak) { const a = accOf(i); if (a == null || a >= 0.6) return false; }       // 4. 취약
     return !q || i.term.toLowerCase().includes(q) || i.meaning.toLowerCase().includes(q);
-  }).sort((a, b) => L.filter === 'weak' ? accOf(a) - accOf(b) : b.createdAt - a.createdAt);
+  }).sort((a, b) => L.weak ? accOf(a) - accOf(b) : (dayOf(a) || 99) - (dayOf(b) || 99) || b.createdAt - a.createdAt);
 }
 function renderList() {
   const L = S.list, items = S.items;
@@ -2248,20 +2312,16 @@ function renderList() {
   const search = h('input', { class: 'search', type: 'search', id: 'listSearch', placeholder: '단어 또는 뜻 검색', value: L.q, oninput: (e) => { L.q = e.target.value; L.limit = 80; refreshList(); } });
   const groups = dayGroups(S.items);
   if (L.day !== '' && !groups.some((g) => g.key === Number(L.day))) L.day = '';
-  const dateSel = h('select', { class: 'datesel', id: 'listDay', 'aria-label': '일차 선택', onchange: (e) => { L.day = e.target.value; L.limit = 80; render(); } },
+  const set = (k, v) => { L[k] = v; L.limit = 80; render(); };
+  const daySel = h('select', { class: 'datesel', id: 'listDay', 'aria-label': '일차', onchange: (e) => set('day', e.target.value) },
     h('option', { value: '' }, '일차 전체'),
     groups.map((g) => h('option', { value: String(g.key), selected: L.day !== '' && Number(L.day) === g.key }, `${dayLabel(g.key)} · ${g.count}개`)));
-  wrap.append(h('div', { class: 'section' }, h('div', { class: 'searchrow' }, search, dateSel),
-    h('div', { class: 'chips' }, [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C'], ['word', '단어'], ['example', '예문'], ['weak', '취약 60%↓']].map(([k, lab]) =>
-      h('button', { class: 'chip', 'aria-pressed': String(L.filter === k), onclick: () => { L.filter = k; L.limit = 80; render(); } }, lab)))));
-  if (L.day !== '' && rows.length) {
-    const toSel = h('select', { class: 'datesel', id: 'bulkDay', style: 'max-width:none' }, DAYS.map((n) => h('option', { value: String(n), selected: n === (Number(L.day) || S.reg.day || 1) }, `${n}일차`)));
-    wrap.append(h('div', { class: 'bulkbar' }, h('span', null, `이 목록 ${rows.length}개를`), toSel,
-      h('button', { class: 'btn ghost sm', onclick: async () => {
-        const n = Number(toSel.value); rows.forEach((i) => (i.day = n)); await Store.putMany(rows);
-        L.day = String(n); render(); toast(`${rows.length}개를 ${n}일차로 바꿨어요`);
-      } }, '로 변경')));
-  }
+  const seg = (k, opts) => h('div', { class: 'seg seg3 fseg' }, opts.map(([v, lab]) => h('button', { 'aria-pressed': String(L[k] === v), onclick: () => set(k, v) }, lab)));
+  wrap.append(h('div', { class: 'section filters' },
+    search,
+    h('div', { class: 'frow' }, daySel, seg('sec', [['all', '전체'], ['LC', 'L/C'], ['RC', 'R/C']])),
+    h('div', { class: 'frow' }, seg('kind', [['all', '전체'], ['word', '단어'], ['example', '예문']]),
+      h('button', { class: 'chip', 'aria-pressed': String(L.weak), onclick: () => set('weak', !L.weak) }, '취약 60%↓'))));
   const listEl = h('div', { class: 'list', id: 'listBox' });
   fillList(listEl, rows);
   wrap.append(listEl);
@@ -2275,7 +2335,7 @@ function fillList(listEl, rows) {
     const a = accOf(i);
     listEl.append(h('button', { class: 'li', onclick: () => openEdit(i) },
       h('span', { class: 'bar ' + i.kind }),
-      h('span', { style: 'min-width:0' }, h('div', { class: 'tag sec-' + secOf(i) }, SEC[secOf(i)], h('span', { class: 'tagdate' }, ' · ' + dayLabel(dayOf(i)))), h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
+      h('span', { style: 'min-width:0' }, h('div', { class: 'tag sec-' + secOf(i) }, h('span', { class: 'tagdate' }, dayLabel(dayOf(i)) + ' · '), SEC[secOf(i)]), h('div', { class: 't' + (i.kind === 'example' ? ' ex' : '') }, i.term), h('div', { class: 'm' }, i.meaning)),
       h('span', { class: 'r', style: a != null ? `color:${a >= .8 ? 'var(--ok)' : a >= .5 ? 'var(--ex)' : 'var(--no)'}` : '' }, a != null ? pct(a) : '', h('small', null, i.attempts ? `${i.attempts}회` : '미학습'))));
   });
   if (rows.length > S.list.limit) listEl.append(h('button', { class: 'more', onclick: () => { S.list.limit += 200; refreshList(); } }, `더 보기 (${rows.length - S.list.limit}개 남음)`));
@@ -2306,17 +2366,17 @@ function openEdit(item) {
     const t = h('textarea', { class: 'input en', id: 'editTerm', rows: 2, autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', oninput: (e) => (d.term = e.target.value) }); t.value = d.term;
     const m = h('textarea', { class: 'input', id: 'editMeaning', rows: 3, oninput: (e) => (d.meaning = e.target.value) }); m.value = d.meaning;
     const delBtn = h('button', { class: 'btn ghost', style: 'color:var(--no)', onclick: async () => {
-      if (!confirmDel) { confirmDel = true; delBtn.textContent = '한 번 더 누르면 삭제'; delBtn.className = 'btn danger'; return; }
+      if (!confirmDel) { confirmDel = true; delBtn.textContent = '한 번 더 누르면 삭제'; delBtn.className = 'btn danger'; delBtn.style.color = '#fff'; return; }
       S.items = S.items.filter((x) => x !== item); if (S.current === item) S.current = null;
       await Store.del([item.id]); close(); render(); toast('삭제했어요');
     } }, '삭제');
     return h('div', null,
       h('h2', null, '항목 편집', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })),
-      h('div', { class: 'form-l', style: 'margin-top:0' }, '단어장'), secSeg,
+      h('div', { class: 'form-l', style: 'margin-top:0' }, '일차'), daySel,
+      h('div', { class: 'form-l' }, '단어장'), secSeg,
       h('div', { class: 'form-l' }, '구분'), seg,
       h('div', { class: 'form-l' }, '영어'), t,
       h('div', { class: 'form-l' }, '뜻'), m,
-      h('div', { class: 'form-l' }, '일차'), daySel,
       h('div', { class: 'form-l' }, '학습 기록'),
       h('div', { class: 'kv' },
         h('div', null, h('b', null, item.attempts), h('span', null, '푼 횟수')),
@@ -2359,7 +2419,7 @@ function openMenu() {
   });
 }
 function backupJSON() {
-  return JSON.stringify({ app: 'toeic-voca', version: 2, exportedAt: new Date().toISOString(), items: S.items }, null, 1);
+  return JSON.stringify({ app: 'toeic-voca', version: 3, account: S.user ? { id: S.user.id, name: S.user.name, salt: S.user.salt, hash: S.user.hash, admin: !!S.user.admin, apv: S.user.apv, apvCode: S.user.apvCode, apvSig: S.user.apvSig, createdAt: S.user.createdAt } : null, exportedAt: new Date().toISOString(), items: S.items }, null, 1);
 }
 async function exportBackup() {
   if (!S.items.length) { toast('내보낼 단어가 없어요'); return; }
@@ -2480,6 +2540,14 @@ if ('serviceWorker' in navigator) {
   initClaude();
   await Store.init();
   try { S.users = await Store.users(); } catch (e) { S.users = []; }
+  if (!S.users.length && Store.mode === 'idb') {
+    // 기본 저장소에 계정이 없으면 예비 사본(또는 예전 임시 저장소)에서 되살림
+    const back = Store.readMirror('toeic-voca-m-users').concat(Store.readMirror('toeic-voca-users'));
+    const seen = new Set();
+    for (const u of back) { if (u && u.id && u.hash && !seen.has(u.id)) { seen.add(u.id); await Store.putUser(u).catch(() => {}); } }
+    if (seen.size) { S.users = await Store.users(); S.recovered = true; }
+  }
+  Store._users = S.users; Store.mirrorUsers(S.users);
   S.auth.admin.unlocked = !!(await Store.getMeta('admin'));
   let sid = await Store.getMeta('session');
   if (!sid) { try { sid = localStorage.getItem('toeic-voca-session'); } catch (e) {} }

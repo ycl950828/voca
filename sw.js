@@ -1,5 +1,5 @@
 // 오프라인 실행용 서비스 워커: 앱 파일을 기기에 저장해 두고 인터넷 없이도 열리게 함
-const CACHE = 'toeic-voca-v12';
+const CACHE = 'toeic-voca-v14';
 const FILES = ["./", "apple-touch-icon.png", "eng.traineddata.gz", "icon-192.png", "icon-512.png", "index.html", "kor.traineddata.gz", "manifest.webmanifest", "tesseract-core-lstm.wasm.js", "tesseract-core-simd-lstm.wasm.js", "tesseract.min.js", "worker.min.js"];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
