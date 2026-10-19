@@ -1389,7 +1389,7 @@ I'd like to make a reservation for two at seven.  7시에 두 명 예약하고 �
 The company advertised its new service on the radio.  그 회사는 라디오에 새 서비스를 광고했다.`;
 async function loadSampleToStudy() {
   const entries = VocabParser.parse(SAMPLE).filter((e) => e.include).map((e) => ({ ...e, section: 'RC', day: 1 }));
-  const n = await saveEntries(entries);
+  const n = (await saveEntries(entries)).added;
   toast(`예시 ${n}개를 넣었어요. 단어장 탭에서 언제든 지울 수 있어요.`);
   render(true);
 }
@@ -1579,19 +1579,35 @@ function renderSaveBar() {
 function updateSaveBar() { const b = document.getElementById('saveBtn'); if (!b) return; const n = selectedCount(); b.textContent = saveLabel(n); b.disabled = n === 0; }
 
 async function saveEntries(entries) {
-  const known = new Set(S.items.map((i) => keyOf(i.term, i.kind, i.section)));
-  const fresh = [];
+  // 반환: { added, dayFilled, dup }
+  const byKey = new Map(S.items.map((i) => [keyOf(i.term, i.kind, i.section), i]));
+  const norm = (t) => t.toLowerCase().replace(/\s+/g, ' ').trim();
+  const fresh = [], touched = [];
+  let dup = 0, dayFilled = 0;
   for (const e of entries) {
     if (!e.include) continue;
     const t = (e.term || '').trim(), m = (e.meaning || '').trim();
     if (!t || !m) continue;
     const sec = e.section || S.reg.section;
-    const k = keyOf(t, e.kind, sec); if (known.has(k)) continue;
-    known.add(k); fresh.push(newItem({ ...e, section: sec, day: e.day || S.reg.day, term: t, meaning: m }));
+    const day = dayOf(e) || S.reg.day || null;
+    let ex = byKey.get(keyOf(t, e.kind, sec));
+    // 같은 단어가 다른 L/C·R/C로 저장돼 있고 일차가 없으면 그 단어로 봄 (예전 단어는 R/C로 저장돼 있었음)
+    if (!ex && day) ex = S.items.find((i) => !dayOf(i) && i.kind === e.kind && norm(i.term) === norm(t));
+    if (ex) {
+      if (day && !dayOf(ex)) {
+        // 이미 있는 단어: 일차가 비어 있을 때만 채움 (학습 기록은 그대로)
+        ex.day = day;
+        if (secOf(ex) !== sec) ex.section = sec;
+        touched.push(ex); dayFilled++;
+      } else dup++;
+      continue;
+    }
+    const it = newItem({ ...e, section: sec, day, term: t, meaning: m });
+    byKey.set(keyOf(t, e.kind, sec), it); fresh.push(it);
   }
   S.items.push(...fresh);
-  await Store.putMany(fresh).catch(() => showWarn('저장에 실패했어요. 백업을 내보내 두세요.'));
-  return fresh.length;
+  await Store.putMany(fresh.concat(touched)).catch(() => showWarn('저장에 실패했어요. 백업을 내보내 두세요.'));
+  return { added: fresh.length, dayFilled, dup };
 }
 async function onSave() {
   const R = S.reg;
@@ -1600,11 +1616,13 @@ async function onSave() {
     const dp = document.getElementById('dayPick'); if (dp) { dp.scrollIntoView({ block: 'start', behavior: 'smooth' }); dp.classList.add('need'); setTimeout(() => dp.classList.remove('need'), 1600); }
     return;
   }
-  const chosen = R.entries.filter((e) => e.include && e.term.trim() && e.meaning.trim()).length;
-  const n = await saveEntries(R.entries);
+  const res = await saveEntries(R.entries);
   R.entries = []; R.raw = ''; R.showText = false;
   render();
-  toast(n < chosen ? `${n}개 저장 (중복 ${chosen - n}개 제외)` : `${n}개를 저장했어요`, { label: '암기하기', fn: () => go('study') });
+  const parts = [`${res.added}개 저장`];
+  if (res.dayFilled) parts.push(`기존 ${res.dayFilled}개에 일차 지정`);
+  if (res.dup) parts.push(`중복 ${res.dup}개 제외`);
+  toast(parts.join(' · '), { label: '암기하기', fn: () => go('study') });
 }
 
 /* ---------- 사진 → 자르기 → 인식 ---------- */
@@ -2270,6 +2288,7 @@ function refreshList() {
 
 /* ---------- 시트 ---------- */
 function openSheet(content) {
+  document.querySelectorAll('.toast').forEach((t) => t.remove());   // 창 위에 알림이 겹치지 않게
   const close = () => { $layer.innerHTML = ''; };
   const bd = h('div', { class: 'backdrop', onclick: (e) => { if (e.target === bd) close(); } }, h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' }, h('div', { class: 'grab' }), content(close)));
   $layer.innerHTML = ''; $layer.append(bd);
@@ -2367,25 +2386,54 @@ async function exportBackup() {
 }
 async function importBackup(file) {
   if (!file) return;
+  let list;
   try {
     const obj = JSON.parse(await file.text());
-    const list = Array.isArray(obj) ? obj : obj.items;
+    list = (Array.isArray(obj) ? obj : obj.items) || null;
     if (!Array.isArray(list)) throw new Error('형식');
-    const byKey = new Map(S.items.map((i) => [keyOf(i.term, i.kind, i.section), i]));
-    const changed = []; let added = 0, merged = 0;
-    for (const r of list) {
-      if (!r || !r.term || !r.meaning) continue;
-      const kind = r.kind === 'example' ? 'example' : 'word';
-      const section = r.section === 'LC' ? 'LC' : 'RC';
-      const k = keyOf(r.term, kind, section), ex = byKey.get(k);
-      const rday = dayOf(r);
-      if (ex && rday && dayOf(ex) !== rday) { ex.day = rday; if (!changed.includes(ex)) changed.push(ex); }
-      if (ex) { if ((r.attempts || 0) > ex.attempts) { Object.assign(ex, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 }); changed.push(ex); merged++; } }
-      else { const it = { ...newItem({ term: String(r.term), meaning: String(r.meaning), kind, section, day: rday, ref: r.ref || '' }), weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, createdAt: r.createdAt || Date.now(), lastSeen: r.lastSeen || 0 }; S.items.push(it); byKey.set(k, it); changed.push(it); added++; }
+    list = list.filter((r) => r && r.term && r.meaning);
+  } catch (e) { toast('백업 파일을 읽지 못했어요. 내보낸 .json 파일인지 확인해 주세요.'); return; }
+  if (!list.length) { toast('백업 파일에 단어가 없어요'); return; }
+  const studied = list.filter((r) => (r.attempts | 0) > 0).length;
+  const dated = list.filter((r) => dayOf(r)).length;
+  // 학습 기록을 같이 가져올지 선택
+  openSheet((close) => {
+    let withStats = studied > 0;
+    const opt = (val, title, desc) => h('button', { class: 'drow' + (withStats === val ? ' on' : ''), style: 'grid-template-columns:24px minmax(0,1fr)', onclick: (e) => { withStats = val; e.currentTarget.parentElement.querySelectorAll('.drow').forEach((b, i) => b.classList.toggle('on', (i === 0) === val)); } },
+      h('span', { class: 'dchk', html: I.check }), h('span', null, h('span', { class: 'dname' }, title), h('small', { style: 'display:block;color:var(--muted);font-size:12px;margin-top:2px' }, desc)));
+    return h('div', null,
+      h('h2', null, '백업 불러오기', h('button', { class: 'iconbtn', html: I.x, 'aria-label': '닫기', onclick: close })),
+      h('p', { class: 'note', style: 'margin:0 0 12px' }, `단어 ${list.length}개 · 학습 기록 있는 단어 ${studied}개 · 일차 지정 ${dated}개`),
+      h('div', { class: 'dlist', style: 'max-height:none' },
+        opt(true, '학습 기록도 가져오기', '정답률·푼 횟수·출제 비중까지 그대로 가져와요. 이미 있는 단어는 더 많이 푼 기록으로 맞춰요.'),
+        opt(false, '단어만 가져오기', '단어·뜻·일차만 가져오고 학습 기록은 처음부터 시작해요. 이미 있는 단어의 기록은 바꾸지 않아요.')),
+      h('div', { class: 'row-btns', style: 'margin-top:14px' },
+        h('button', { class: 'btn primary', style: 'flex:1', onclick: async () => { close(); await doImport(list, withStats); } }, '불러오기'),
+        h('button', { class: 'btn ghost', onclick: close }, '취소')));
+  });
+}
+async function doImport(list, withStats) {
+  const byKey = new Map(S.items.map((i) => [keyOf(i.term, i.kind, i.section), i]));
+  const changed = new Set(); let added = 0, merged = 0, dayed = 0;
+  for (const r of list) {
+    const kind = r.kind === 'example' ? 'example' : 'word';
+    const section = r.section === 'LC' ? 'LC' : 'RC';
+    const k = keyOf(r.term, kind, section), ex = byKey.get(k);
+    const rday = dayOf(r);
+    if (ex) {
+      if (rday && dayOf(ex) !== rday) { ex.day = rday; changed.add(ex); dayed++; }
+      if (withStats && (r.attempts || 0) > ex.attempts) { Object.assign(ex, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 }); changed.add(ex); merged++; }
+      continue;
     }
-    await Store.putMany(changed); render();
-    toast(`${added}개 추가${merged ? `, ${merged}개 기록 갱신` : ''}`);
-  } catch (e) { toast('백업 파일을 읽지 못했어요. 내보낸 .json 파일인지 확인해 주세요.'); }
+    const it = { ...newItem({ term: String(r.term), meaning: String(r.meaning), kind, section, day: rday, ref: r.ref || '' }), createdAt: r.createdAt || Date.now() };
+    if (withStats) Object.assign(it, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 });
+    S.items.push(it); byKey.set(k, it); changed.add(it); added++;
+  }
+  await Store.putMany([...changed]); S.current = null; render();
+  const parts = [`${added}개 추가`];
+  if (merged) parts.push(`${merged}개 학습 기록 갱신`);
+  if (dayed) parts.push(`${dayed}개 일차 반영`);
+  toast(parts.join(' · ') + (withStats ? '' : ' (학습 기록 제외)'));
 }
 
 /* ================= 라우팅 ================= */
