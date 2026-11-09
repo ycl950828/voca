@@ -13,9 +13,9 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>토익 단어 암기</title>
 </head>
 <body>
-<title>토익 단어 암기</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap">
@@ -898,7 +898,8 @@ async function hashPw(pw, salt) {
 async function sha256hex(t) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(t)))].map((b) => b.toString(16).padStart(2, '0')).join(''); }
 const b64u = (buf) => toB64(buf).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const fromB64u = (t) => { const x = t.replace(/-/g, '+').replace(/_/g, '/'); return fromB64(x + '='.repeat((4 - (x.length % 4)) % 4)); };
-const APPROVAL_MSG = (code) => enc.encode('toeic-voca|v2|' + code.trim().toUpperCase());
+// 서명 내용에 아이디도 넣음 (v3): 다른 사람의 승인 코드를 가져다 다른 아이디에 쓸 수 없음
+const APPROVAL_MSG = (code, id) => enc.encode('toeic-voca|v3|' + String(code).trim().toUpperCase() + '|' + String(id).trim().toLowerCase());
 // 관리자 키로 서명 키 잠금 해제 (틀리면 null)
 async function unlockSigningKey(adminKey) {
   try {
@@ -907,16 +908,16 @@ async function unlockSigningKey(adminKey) {
     return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64u(SIGN_LOCK.iv) }, aes, fromB64u(SIGN_LOCK.ct)));
   } catch (e) { return null; }
 }
-async function signApproval(code) {
+async function signApproval(code, id) {
   const d = await Store.getMeta('signKey');
   if (!d) return null;
   const key = await crypto.subtle.importKey('jwk', { ...SIGN_PUB, d }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
-  return b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, APPROVAL_MSG(code)));
+  return b64u(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, APPROVAL_MSG(code, id)));
 }
-async function verifyApproval(code, sig) {
+async function verifyApproval(code, id, sig) {
   try {
     const key = await crypto.subtle.importKey('jwk', SIGN_PUB, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, fromB64u(sig), APPROVAL_MSG(code));
+    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, fromB64u(sig), APPROVAL_MSG(code, id));
   } catch (e) { return false; }
 }
 // 문자 내용을 통째로 붙여넣어도 승인 코드만 골라냄
@@ -967,11 +968,11 @@ async function restoreFromBackup(file) {
   try { obj = JSON.parse(await file.text()); } catch (e) { toast('백업 파일을 읽지 못했어요'); return; }
   const a = obj && obj.account;
   if (!a || !a.id || !a.hash || !a.salt) { toast('이 백업에는 계정 정보가 없어요. 계정을 만든 뒤 단어장 메뉴에서 불러와 주세요.'); return; }
-  // 승인받은 계정인지 서명으로 확인 (파일을 고쳐서 승인을 건너뛸 수 없게)
-  const apvOk = !!a.admin || (a.apvCode && a.apvSig && (await verifyApproval(a.apvCode, a.apvSig)));
+  // 승인받은 계정인지 서명으로만 확인 (파일의 admin 값은 믿지 않음 → 관리자는 로그인 후 관리자 키로 다시 등록)
+  const apvOk = !!(a.apvCode && a.apvSig && (await verifyApproval(a.apvCode, a.id, a.apvSig)));
   const exist = S.users.find((u) => u.id === a.id);
   if (!exist) {
-    await Store.putUser({ id: a.id, name: a.name || a.id, salt: a.salt, hash: a.hash, admin: !!a.admin, apv: apvOk ? 2 : undefined, apvCode: a.apvCode, apvSig: a.apvSig, createdAt: a.createdAt || Date.now() });
+    await Store.putUser({ id: a.id, name: a.name || a.id, salt: a.salt, hash: a.hash, admin: false, apv: apvOk ? 2 : undefined, apvCode: a.apvCode, apvSig: a.apvSig, createdAt: a.createdAt || Date.now() });
     S.users = await Store.users(); Store._users = S.users;
   }
   const items = (Array.isArray(obj.items) ? obj.items : []).filter((i) => i && i.id && i.term && i.meaning).map((i) => ({ ...i, uid: a.id }));
@@ -980,7 +981,7 @@ async function restoreFromBackup(file) {
   S.auth = { mode: 'login', err: '', req: null, admin: S.auth.admin };
   render();
   const idEl = document.getElementById('loginId'); if (idEl) idEl.value = a.id;
-  toast(`${a.name || a.id} 계정${exist ? '' : '을 복구하고'} 단어 ${items.length}개를 되살렸어요. 비밀번호로 로그인해 주세요.`);
+  toast(`${a.name || a.id} 계정${exist ? '' : '을 복구하고'} 단어 ${items.length}개를 되살렸어요. 비밀번호로 로그인해 주세요.` + (!exist && !apvOk ? ' 로그인 후 한 번 승인을 받아야 해요.' : ''));
 }
 async function logout() {
   await Store.setMeta('session', null);
@@ -1088,6 +1089,21 @@ function renderAuth() {
     const left = Math.max(0, R.expires - Date.now());
     const expired = left === 0;
     const msg = `[토익 단어 암기] 가입 승인 요청\n이름: ${R.name}\n아이디: ${R.id}\n요청 코드: ${R.code}`;
+    // 다시 승인받는 관리자(백업 복구 등): 관리자 키로 바로 승인
+    const admBox = R.reapprove ? h('details', { class: 'adm' }, h('summary', null, '관리자 키가 있다면'),
+      h('form', { class: 'aform', style: 'padding:0', onsubmit: async (e) => {
+        e.preventDefault();
+        setErr('관리자 키 확인 중…');
+        const dkey = await unlockSigningKey(val('raAdminKey'));
+        if (!dkey) return setErr('관리자 키가 맞지 않아요.');
+        await Store.setMeta('signKey', dkey);
+        const prev = S.users.find((x) => x.id === R.id) || {};
+        const u = { ...prev, id: R.id, name: R.name, salt: R.salt, hash: R.hash, createdAt: R.createdAt || Date.now(), admin: true, apv: 2 };
+        await Store.putUser(u); S.users = await Store.users();
+        S.auth = { mode: 'login', err: '', req: null, admin: A.admin };
+        toast(`관리자 ${u.name}님, 다시 등록됐어요`);
+        await enterApp(u);
+      } }, authField('raAdminKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }), h('button', { class: 'btn ghost sm', type: 'submit' }, '관리자로 승인'))) : null;
     const smsHref = `sms:${ADMIN_PHONE}&body=${encodeURIComponent(msg)}`;
     const panel = h('div', { class: 'panel aform' },
       R.reapprove ? h('p', { class: 'reapv' }, `${R.name}님, 보안 강화로 한 번 더 승인이 필요해요. 단어와 학습 기록은 그대로 남아 있어요.`) : null,
@@ -1108,7 +1124,7 @@ function renderAuth() {
             const sig = extractApproval(val('suOtp'));
             if (!sig) return setErr('승인 코드를 붙여넣어 주세요. 관리자가 보낸 문자 전체를 붙여넣어도 돼요.');
             R.tries++;
-            if (!(await verifyApproval(R.code, sig))) {
+            if (!(await verifyApproval(R.code, R.id, sig))) {
               if (R.tries >= 5) { R.expires = 0; A.err = '5번 틀려서 이 요청 코드는 막혔어요. 새 요청 코드를 받아 주세요.'; return render(); }
               return setErr(`이 요청 코드(${R.code})의 승인 코드가 아니에요. (${R.tries}/5)`);
             }
@@ -1123,7 +1139,8 @@ function renderAuth() {
               h('textarea', { id: 'suOtp', class: 'ai', rows: 3, placeholder: '관리자가 보낸 승인 코드(또는 문자 전체)를 붙여넣으세요', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', style: 'height:auto;padding:10px 14px;font-family:var(--f-num);font-size:13px;resize:none' })),
             h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { try { const t = await navigator.clipboard.readText(); document.getElementById('suOtp').value = t; } catch (e) { toast('입력칸을 길게 눌러 붙여넣기 해 주세요'); } } }, '복사한 내용 붙여넣기'),
             err,
-            h('button', { class: 'btn primary', type: 'submit' }, R.reapprove ? '다시 승인받기' : '가입 완료')));
+            h('button', { class: 'btn primary', type: 'submit' }, R.reapprove ? '다시 승인받기' : '가입 완료')),
+      admBox);
     wrap.append(panel, h('div', { class: 'alinks' }, back));
     return wrap;
   }
@@ -1133,7 +1150,7 @@ function renderAuth() {
 }
 
 /* ---------- 관리자 화면 (관리자 계정에만 보임) ---------- */
-const ADM = { code: '', result: '', history: [] };
+const ADM = { code: '', id: '', result: '', history: [] };
 function renderAdmin() {
   const wrap = h('div', { class: 'scroll' });
   wrap.append(h('h1', { class: 'h1' }, '관리자', h('small', { class: 'who' }, S.user.name + '님')));
@@ -1151,28 +1168,33 @@ function renderAdmin() {
       authField('admKey', '관리자 키', { type: 'password', placeholder: 'VOCA-XXXX-XXXX-XXXX' }), msg,
       h('button', { class: 'btn primary', type: 'submit' }, '확인'))));
   } else {
-    const smsText = ADM.result ? `[토익 단어 암기] 승인 코드 (요청 ${ADM.code})\n${ADM.result}` : '';
+    const smsText = ADM.result ? `[토익 단어 암기] 승인 코드 (요청 ${ADM.code} · 아이디 ${ADM.id})\n${ADM.result}` : '';
     const out = h('div', { class: 'reqbox', hidden: !ADM.result },
-      h('span', null, ADM.code ? `요청 코드 ${ADM.code}의 승인 코드` : ''), h('code', { class: 'sigbox', id: 'admResult' }, ADM.result || ''),
+      h('span', null, ADM.code ? `${ADM.id} · 요청 코드 ${ADM.code}의 승인 코드` : ''), h('code', { class: 'sigbox', id: 'admResult' }, ADM.result || ''),
       h('button', { class: 'btn primary sm', onclick: async () => { try { await navigator.clipboard.writeText(smsText); toast('복사했어요. 신청자에게 문자로 보내 주세요.'); } catch (e) { toast('승인 코드를 길게 눌러 복사해 주세요'); } } }, '문자로 보낼 내용 복사'));
     const form = h('form', { class: 'aform', onsubmit: async (e) => {
       e.preventDefault();
-      const code = val('admCode').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // 신청 문자 전체를 요청 코드 칸에 붙여넣어도 아이디·코드를 골라냄
+      const raw = val('admCode'), mId = raw.match(/아이디\s*[:：]\s*([a-z0-9_.-]{4,20})/i), mCode = raw.match(/요청\s*코드\s*[:：]\s*([A-Za-z0-9]{6})/);
+      const code = (mCode ? mCode[1] : raw).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const id = (val('admId').trim() || (mId ? mId[1] : '')).toLowerCase();
       if (code.length !== 6) { toast('요청 코드 6자리를 입력해 주세요'); return; }
-      const sig = await signApproval(code);
+      if (!/^[a-z0-9_.-]{4,20}$/.test(id)) { toast('신청자 아이디를 입력해 주세요 (신청 문자에 있어요)'); return; }
+      const sig = await signApproval(code, id);
       if (!sig) { ADM.hasKey = false; render(); return; }
-      ADM.code = code; ADM.result = sig;
-      ADM.history = [{ code, at: Date.now() }].concat(ADM.history.filter((x) => x.code !== code)).slice(0, 5);
+      ADM.code = code; ADM.id = id; ADM.result = sig;
+      ADM.history = [{ code, id, at: Date.now() }].concat(ADM.history.filter((x) => x.code !== code)).slice(0, 5);
       render();
     } },
-      authField('admCode', '신청자에게 받은 요청 코드', { placeholder: '예: K7QM2D', maxlength: '8', value: ADM.code, style: 'text-transform:uppercase;font-family:var(--f-num);letter-spacing:.1em' }),
+      authField('admCode', '신청자에게 받은 요청 코드', { placeholder: '예: K7QM2D (문자 전체 붙여넣기 가능)', value: ADM.code, style: 'text-transform:uppercase;font-family:var(--f-num);letter-spacing:.1em' }),
+      authField('admId', '신청자 아이디', { placeholder: '신청 문자의 아이디', value: ADM.id, maxlength: '20' }),
       h('button', { class: 'btn primary', type: 'submit' }, '승인 코드 만들기'));
     wrap.append(h('div', { class: 'section' }, h('h3', null, '가입 승인'),
       h('div', { class: 'panel aform' }, form, out,
         h('p', { class: 'note', style: 'margin:0' }, '승인 코드는 이 폰에서만 만들 수 있는 전자서명이에요. 신청자 문자에 답장으로 붙여넣어 보내면, 신청자가 5분 안에 붙여넣어야 가입돼요.'))));
     if (ADM.history.length) wrap.append(h('div', { class: 'section' }, h('h3', null, '최근 승인한 요청 코드'),
       h('div', { class: 'list' }, ADM.history.map((x) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
-        h('span', { style: 'font-family:var(--f-num);font-weight:600' }, x.code), h('span', { class: 'r' }, new Date(x.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })))))));
+        h('span', { style: 'font-family:var(--f-num);font-weight:600' }, x.code, x.id ? h('small', { style: 'font-weight:400;color:var(--muted);margin-left:6px' }, x.id) : null), h('span', { class: 'r' }, new Date(x.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })))))));
   }
   const accList = h('div', { class: 'list' }, S.users.map((u) => h('div', { class: 'li', style: 'grid-template-columns:minmax(0,1fr) auto;padding-left:14px' },
     h('span', { style: 'min-width:0' }, h('div', { class: 't', style: 'font-family:var(--f-ui);font-size:15px' }, u.name), h('div', { class: 'm' }, u.id)),
@@ -1270,21 +1292,33 @@ function openScope() {
   });
 }
 
+const W_MIN = 1e-4, W_MAX = 4, DAY_MS = 864e5;
+// 실제 출제 비중: 맞혀서 낮아진 비중은 시간이 지나면 다시 1로 회복 (간격 반복)
+// 연속 정답 n번 ≈ 비중 ½ⁿ → 1·2·4·8·16일(최대 30일)에 걸쳐 회복. 저장된 weight 값은 바꾸지 않음
+function effWeight(it) {
+  const w = Math.min(Math.max(+it.weight || 1, W_MIN), W_MAX);
+  if (w >= 1 || !it.lastSeen) return w;
+  const n = Math.log2(1 / w);
+  const span = Math.min(30, 2 ** Math.max(0, n - 1)) * DAY_MS;
+  return w + (1 - w) * Math.min(1, Math.max(0, Date.now() - it.lastSeen) / span);
+}
 function pickNext() {
   const items = S.items.filter((i) => inScope(i));
   if (!items.length) { S.current = null; return; }
   let pool = items;
   if (items.length > 1 && S.current) pool = items.filter((i) => i.id !== S.current.id);
-  const total = pool.reduce((a, i) => a + Math.max(i.weight, 1e-4), 0);
-  let r = Math.random() * total;
-  for (const it of pool) { r -= Math.max(it.weight, 1e-4); if (r < 0) { S.current = it; return; } }
+  const ws = pool.map(effWeight);
+  let r = Math.random() * ws.reduce((a, w) => a + w, 0);
+  for (let k = 0; k < pool.length; k++) { r -= ws[k]; if (r < 0) { S.current = pool[k]; return; } }
   S.current = pool[pool.length - 1];
 }
 async function answer(ok) {
   const it = S.current; if (!it) return;
   S.last = { id: it.id, prev: { weight: it.weight, attempts: it.attempts, correct: it.correct, lastSeen: it.lastSeen } };
   it.attempts += 1; it.lastSeen = Date.now();
-  if (ok) { it.correct += 1; it.weight = Math.max(it.weight * 0.5, 1e-4); }  // O → 재등장 빈도 ½, X → 유지
+  // O → 비중 ½ (시간이 지나면 회복), X → 최소 1로 되돌리고 2배 (최대 4)
+  if (ok) { it.correct += 1; it.weight = Math.max(it.weight * 0.5, W_MIN); }
+  else it.weight = Math.min(W_MAX, Math.max(1, it.weight * 2));
   Store.put(it).catch(() => showWarn('기록을 저장하지 못했어요.'));
   const card = document.querySelector('.qcard');
   if (card) card.classList.add(ok ? 'flash-ok' : 'flash-no');
@@ -1296,7 +1330,7 @@ async function answer(ok) {
 function undo() {
   if (!S.last) return;
   const it = S.items.find((i) => i.id === S.last.id); if (!it) return;
-  Object.assign(it, S.last.prev); Store.put(it);
+  Object.assign(it, S.last.prev); Store.put(it).catch(() => showWarn('기록을 저장하지 못했어요.'));
   S.current = it; S.revealed = false; S.last = null; render(true);
 }
 function speak(text) {
@@ -2506,11 +2540,11 @@ async function doImport(list, withStats) {
     const rday = dayOf(r);
     if (ex) {
       if (rday && dayOf(ex) !== rday) { ex.day = rday; changed.add(ex); dayed++; }
-      if (withStats && (r.attempts || 0) > ex.attempts) { Object.assign(ex, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 }); changed.add(ex); merged++; }
+      if (withStats && (r.attempts || 0) > ex.attempts) { Object.assign(ex, { weight: Math.min(W_MAX, Math.max(W_MIN, +r.weight || 1)), attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 }); changed.add(ex); merged++; }
       continue;
     }
     const it = { ...newItem({ term: String(r.term), meaning: String(r.meaning), kind, section, day: rday, ref: r.ref || '' }), createdAt: r.createdAt || Date.now() };
-    if (withStats) Object.assign(it, { weight: +r.weight || 1, attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 });
+    if (withStats) Object.assign(it, { weight: Math.min(W_MAX, Math.max(W_MIN, +r.weight || 1)), attempts: r.attempts | 0, correct: r.correct | 0, lastSeen: r.lastSeen || 0 });
     S.items.push(it); byKey.set(k, it); changed.add(it); added++;
   }
   await Store.putMany([...changed]); S.current = null; render();
@@ -2558,6 +2592,8 @@ if ('serviceWorker' in navigator) {
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').then((r) => r.update()).catch(() => {}); });
+  // 앱이 뜬 뒤 여유가 생기면 기기 안 인식 엔진(약 12MB)을 뒤에서 받아 둠 (처음 설치를 가볍게, 오프라인 인식은 그대로)
+  navigator.serviceWorker.ready.then((r) => setTimeout(() => { try { if (r.active) r.active.postMessage('warm-ocr'); } catch (e) {} }, 8000)).catch(() => {});
 }
 (async function boot() {
   render();
